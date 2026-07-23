@@ -260,6 +260,11 @@ def download(
             QUALITY_FORMATS.get(quality, QUALITY_FORMATS["high"]),
             "--merge-output-format",
             "mp4",
+            # Re-encode audio to AAC while merging so audio always survives in the
+            # mp4 container (Opus/WebM audio can't be copied into mp4 and was
+            # being dropped on longer videos, leaving them silent).
+            "--postprocessor-args",
+            "Merger:-c:v copy -c:a aac -b:a 192k",
         ]
     cmd.append(url)
 
