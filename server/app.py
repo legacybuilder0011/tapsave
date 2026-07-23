@@ -17,9 +17,91 @@ import tempfile
 import uuid
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 app = FastAPI(title="TapSave backend")
+
+# Simple web downloader so TapSave works from a PC (or any browser) with no app:
+# open this server's URL, paste a link, click Download.
+INDEX_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TapSave</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+         justify-content: center; font-family: system-ui, sans-serif;
+         background: #0f0f14; color: #f4f4f6; padding: 24px; }
+  .card { width: 100%; max-width: 520px; background: #1a1a22; border-radius: 16px;
+          padding: 28px; box-shadow: 0 12px 40px rgba(0,0,0,.4); }
+  h1 { margin: 0 0 6px; font-size: 26px; }
+  p.sub { margin: 0 0 20px; color: #a7a7b4; font-size: 14px; }
+  input { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #35354a;
+          background: #12121a; color: #fff; font-size: 15px; }
+  button { width: 100%; margin-top: 12px; padding: 14px; border: 0; border-radius: 10px;
+           background: #6c4dff; color: #fff; font-size: 16px; font-weight: 600;
+           cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  #status { margin-top: 16px; font-size: 14px; min-height: 20px; color: #c9c9d6; }
+  .note { margin-top: 18px; font-size: 12px; color: #7d7d8c; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>TapSave</h1>
+    <p class="sub">Paste a video link (TikTok, Instagram, YouTube, Pinterest) and download it.</p>
+    <input id="url" type="url" placeholder="https://..." autocomplete="off" autofocus>
+    <button id="go">Download</button>
+    <div id="status"></div>
+    <p class="note">For content you own or have permission to download. First download
+      after a while can take ~1 minute while the server wakes up.</p>
+  </div>
+<script>
+  const urlInput = document.getElementById('url');
+  const goBtn = document.getElementById('go');
+  const statusEl = document.getElementById('status');
+
+  async function download() {
+    const url = urlInput.value.trim();
+    if (!url) { statusEl.textContent = 'Paste a link first.'; return; }
+    goBtn.disabled = true;
+    statusEl.textContent = 'Working… fetching the video (this can take a bit).';
+    try {
+      const resp = await fetch('/download?url=' + encodeURIComponent(url));
+      if (!resp.ok) {
+        const text = await resp.text();
+        statusEl.textContent = 'Error: ' + text.slice(0, 200);
+        return;
+      }
+      const blob = await resp.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'video_' + Date.now() + '.mp4';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+      statusEl.textContent = 'Done! Check your downloads folder.';
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e;
+    } finally {
+      goBtn.disabled = false;
+    }
+  }
+
+  goBtn.addEventListener('click', download);
+  urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') download(); });
+</script>
+</body>
+</html>"""
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return INDEX_HTML
 
 # Prefer the best video+audio and merge to mp4 so the phone gets one
 # ready-to-play file. For TikTok, yt-dlp already returns the no-watermark
