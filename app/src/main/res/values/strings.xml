@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">TapSave</string>
+    <string name="tagline">Copy a video link, tap the floating button, save it to your phone.</string>
+    <string name="server_label">Server address</string>
+    <string name="server_hint">https://your-server:8080</string>
+    <string name="save_server">Save server address</string>
+    <string name="grant_overlay">Grant \'display over other apps\'</string>
+    <string name="start_button">Start floating button</string>
+    <string name="stop_button">Stop floating button</string>
+    <string name="how_to">How to use:\n1. Run the TapSave backend and put its address above.\n2. Grant the overlay permission and start the floating button.\n3. In TikTok/Instagram/YouTube/Pinterest, copy the video link (or Share to TapSave).\n4. Tap the floating button — it downloads and saves to Downloads/TapSave.\n\nFor content you own or have permission to download.</string>
+</resources>

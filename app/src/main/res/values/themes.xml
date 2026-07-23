@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.TapSave" parent="@android:style/Theme.DeviceDefault.Light" />
+
+    <style name="Theme.TapSave.Transparent" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>
