@@ -125,8 +125,13 @@ def index():
 YTDLP_FORMAT = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b"
 
 # YouTube blocks the default web client from server IPs ("Sign in to confirm
-# you're not a bot"). The android/ios players usually work without cookies.
-YOUTUBE_EXTRACTOR_ARGS = "youtube:player_client=android,ios,web"
+# you're not a bot"). These clients help, but a cookies file is the reliable fix.
+YOUTUBE_EXTRACTOR_ARGS = "youtube:player_client=default,android,ios,tv"
+
+# Optional Netscape cookies.txt. On Render, add it as a Secret File named
+# cookies.txt (mounted at /etc/secrets/cookies.txt). If present it's passed to
+# yt-dlp, which lets YouTube downloads through from the server IP.
+COOKIES_FILE = os.environ.get("YTDLP_COOKIES", "/etc/secrets/cookies.txt")
 
 
 @app.get("/health")
@@ -158,12 +163,24 @@ def download(url: str = Query(..., description="Public video URL to fetch")):
         url,
     ]
 
+    # Use cookies when available (needed for YouTube from a datacenter IP).
+    if os.path.exists(COOKIES_FILE):
+        cmd += ["--cookies", COOKIES_FILE]
+
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=300)
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Download timed out")
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.decode(errors="ignore")[-500:] if exc.stderr else "unknown error"
+        if "confirm you" in detail or "not a bot" in detail or "Sign in" in detail:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "YouTube blocked the server (bot check). Add a cookies.txt "
+                    "Secret File on the host to enable YouTube. Other sites still work."
+                ),
+            )
         raise HTTPException(status_code=502, detail=f"yt-dlp failed: {detail}")
 
     files = glob.glob(os.path.join(workdir, "*"))

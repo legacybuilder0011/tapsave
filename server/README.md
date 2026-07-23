@@ -45,6 +45,25 @@ The phone needs a URL it can open over the internet:
 Put that base URL (no trailing `/download`) into the TapSave app's **Server
 address** field.
 
+## YouTube: add a cookies file
+
+YouTube blocks datacenter IPs (like Render's) with a "Sign in to confirm you're
+not a bot" error. To download YouTube from the server you must supply a
+logged-in cookies file. TikTok / Instagram / Pinterest do **not** need this.
+
+> Use a **throwaway Google account**. YouTube may ban accounts used to download
+> from datacenter IPs, so don't use your main account.
+
+1. In a browser **logged into the throwaway account**, install a
+   "Get cookies.txt LOCALLY" extension (Chrome/Firefox), open youtube.com, and
+   export a `cookies.txt` (Netscape format).
+2. On Render: your service → **Environment** → **Secret Files** → **Add Secret
+   File**. Filename `cookies.txt`, paste the file contents. Render mounts it at
+   `/etc/secrets/cookies.txt`, which the backend picks up automatically.
+3. **Manual Deploy → Clear cache & deploy** (or just redeploy). Done.
+
+To run locally with cookies instead, set `YTDLP_COOKIES=/path/to/cookies.txt`.
+
 ## Endpoints
 
 - `GET /health` → `{"ok": true}`
