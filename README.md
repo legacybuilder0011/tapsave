@@ -9,6 +9,14 @@ TapSave has **no accessibility service** on purpose — Google restricts
 accessibility-service apps to accessibility use, so a downloader must be
 separate.
 
+Three ways to use it, all talking to the same backend:
+
+- **Android app** (`app/`) — floating button, copy a link and tap it.
+- **Windows desktop app** (`desktop/`) — a small always-on-top window with a
+  "Paste link & download" button. Published as `TapSave.exe` (no install; may
+  show a SmartScreen "unknown publisher" prompt → More info → Run anyway).
+- **Web page** — just open the backend URL in any browser and paste a link.
+
 > For content you own or have permission to download. Downloading other people's
 > videos or stripping watermarks may violate a platform's Terms of Service and
 > the creator's copyright.
