@@ -20,6 +20,14 @@ import uuid
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
+# A bundled ffmpeg so yt-dlp can always merge video+audio and make mp3s, even if
+# the host has no system ffmpeg. Without merging, videos come out silent.
+try:
+    import imageio_ffmpeg
+    FFMPEG_LOCATION = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    FFMPEG_LOCATION = None
+
 app = FastAPI(title="TapSave backend")
 
 # Simple web downloader so TapSave works from a PC (or any browser) with no app:
@@ -166,9 +174,9 @@ def index():
 # Video format per requested quality. Prefer mp4 and merge so the device gets
 # one ready-to-play file; fall back to any best stream.
 QUALITY_FORMATS = {
-    "high": "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b",
-    "medium": "bv*[height<=720][ext=mp4]+ba/b[height<=720][ext=mp4]/b[height<=720]/b",
-    "low": "bv*[height<=480][ext=mp4]+ba/b[height<=480][ext=mp4]/b[height<=480]/b",
+    "high": "bv*+ba/b",
+    "medium": "bv*[height<=720]+ba/b[height<=720]/b",
+    "low": "bv*[height<=480]+ba/b[height<=480]/b",
 }
 
 # YouTube blocks the default web client from server IPs ("Sign in to confirm
@@ -199,8 +207,18 @@ def diag():
     except Exception as e:  # noqa: BLE001
         version = f"error: {e}"
     present = os.path.exists(COOKIES_FILE)
+    ffmpeg_ok = False
+    if FFMPEG_LOCATION:
+        try:
+            ffmpeg_ok = subprocess.run(
+                [FFMPEG_LOCATION, "-version"], capture_output=True, timeout=30
+            ).returncode == 0
+        except Exception:
+            ffmpeg_ok = False
     return {
         "yt_dlp_version": version,
+        "ffmpeg_location": FFMPEG_LOCATION,
+        "ffmpeg_ok": ffmpeg_ok,
         "cookies_present": present,
         "cookies_path": COOKIES_FILE,
         "cookies_bytes": os.path.getsize(COOKIES_FILE) if present else 0,
@@ -231,6 +249,8 @@ def download(
         "-o",
         output_template,
     ]
+    if FFMPEG_LOCATION:
+        cmd += ["--ffmpeg-location", FFMPEG_LOCATION]
     if audio:
         # Extract audio to mp3.
         cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "mp3"]
