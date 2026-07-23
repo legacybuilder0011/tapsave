@@ -44,6 +44,7 @@ INDEX_HTML = """<!doctype html>
   button { width: 100%; margin-top: 12px; padding: 14px; border: 0; border-radius: 10px;
            background: #6c4dff; color: #fff; font-size: 16px; font-weight: 600;
            cursor: pointer; }
+  button.secondary { background: #2a2a38; }
   button:disabled { opacity: .6; cursor: default; }
   #status { margin-top: 16px; font-size: 14px; min-height: 20px; color: #c9c9d6; }
   .note { margin-top: 18px; font-size: 12px; color: #7d7d8c; line-height: 1.5; }
@@ -53,8 +54,9 @@ INDEX_HTML = """<!doctype html>
   <div class="card">
     <h1>TapSave</h1>
     <p class="sub">Paste a video link (TikTok, Instagram, YouTube, Pinterest) and download it.</p>
-    <input id="url" type="url" placeholder="https://..." autocomplete="off" autofocus>
-    <button id="go">Download</button>
+    <button id="paste">📋 Paste link &amp; download</button>
+    <input id="url" type="url" placeholder="or paste the link here…" autocomplete="off">
+    <button id="go" class="secondary">Download</button>
     <div id="status"></div>
     <p class="note">For content you own or have permission to download. First download
       after a while can take ~1 minute while the server wakes up.</p>
@@ -62,7 +64,20 @@ INDEX_HTML = """<!doctype html>
 <script>
   const urlInput = document.getElementById('url');
   const goBtn = document.getElementById('go');
+  const pasteBtn = document.getElementById('paste');
   const statusEl = document.getElementById('status');
+
+  async function pasteAndDownload() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const match = text && text.match(/https?:\\/\\/[^\\s"'<>]+/i);
+      if (!match) { statusEl.textContent = 'No link found in your clipboard — copy a video link first.'; return; }
+      urlInput.value = match[0];
+      download();
+    } catch (e) {
+      statusEl.textContent = 'Your browser blocked clipboard access — paste the link in the box below instead.';
+    }
+  }
 
   async function download() {
     const url = urlInput.value.trim();
@@ -93,6 +108,7 @@ INDEX_HTML = """<!doctype html>
   }
 
   goBtn.addEventListener('click', download);
+  pasteBtn.addEventListener('click', pasteAndDownload);
   urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') download(); });
 </script>
 </body>
