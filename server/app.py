@@ -126,8 +126,11 @@ def index():
 YTDLP_FORMAT = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b"
 
 # YouTube blocks the default web client from server IPs ("Sign in to confirm
-# you're not a bot"). These clients help, but a cookies file is the reliable fix.
-YOUTUBE_EXTRACTOR_ARGS = "youtube:player_client=default,android,ios,tv"
+# you're not a bot"). Which clients work depends on whether we have cookies:
+# without cookies the mobile/tv clients dodge the check better; with cookies the
+# default/mweb clients actually make use of them.
+YT_ARGS_NO_COOKIES = "youtube:player_client=android,ios,tv"
+YT_ARGS_WITH_COOKIES = "youtube:player_client=default,mweb"
 
 # Optional Netscape cookies.txt. On Render, add it as a Secret File named
 # cookies.txt (mounted at /etc/secrets/cookies.txt). If present it's passed to
@@ -140,13 +143,35 @@ def health():
     return {"ok": True}
 
 
+@app.get("/diag")
+def diag():
+    """Quick check: yt-dlp version and whether the cookies file is mounted."""
+    try:
+        version = subprocess.run(
+            ["yt-dlp", "--version"], capture_output=True, timeout=30
+        ).stdout.decode(errors="ignore").strip()
+    except Exception as e:  # noqa: BLE001
+        version = f"error: {e}"
+    present = os.path.exists(COOKIES_FILE)
+    return {
+        "yt_dlp_version": version,
+        "cookies_present": present,
+        "cookies_path": COOKIES_FILE,
+        "cookies_bytes": os.path.getsize(COOKIES_FILE) if present else 0,
+    }
+
+
 @app.get("/download")
-def download(url: str = Query(..., description="Public video URL to fetch")):
+def download(
+    url: str = Query(..., description="Public video URL to fetch"),
+    debug: bool = Query(False, description="Return more of the yt-dlp error"),
+):
     if not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(status_code=400, detail="URL must start with http(s)://")
 
     workdir = tempfile.mkdtemp(prefix="tapsave_")
     output_template = os.path.join(workdir, f"{uuid.uuid4().hex}.%(ext)s")
+    has_cookies = os.path.exists(COOKIES_FILE)
 
     cmd = [
         "yt-dlp",
@@ -158,16 +183,15 @@ def download(url: str = Query(..., description="Public video URL to fetch")):
         "--merge-output-format",
         "mp4",
         "--extractor-args",
-        YOUTUBE_EXTRACTOR_ARGS,
+        YT_ARGS_WITH_COOKIES if has_cookies else YT_ARGS_NO_COOKIES,
         "-o",
         output_template,
         url,
     ]
 
-    # Use cookies when available (needed for YouTube from a datacenter IP).
-    # yt-dlp writes the cookie jar back to the file, but a Render Secret File is
-    # read-only, so copy it into the writable work dir first.
-    if os.path.exists(COOKIES_FILE):
+    # yt-dlp writes the cookie jar back to the --cookies path, but a Render
+    # Secret File is read-only, so copy it into the writable work dir first.
+    if has_cookies:
         writable_cookies = os.path.join(workdir, "cookies.txt")
         try:
             shutil.copyfile(COOKIES_FILE, writable_cookies)
@@ -180,13 +204,14 @@ def download(url: str = Query(..., description="Public video URL to fetch")):
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Download timed out")
     except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.decode(errors="ignore")[-500:] if exc.stderr else "unknown error"
-        if "confirm you" in detail or "not a bot" in detail or "Sign in" in detail:
+        detail = exc.stderr.decode(errors="ignore") if exc.stderr else "unknown error"
+        detail = detail[-1500:] if debug else detail[-400:]
+        if not has_cookies and ("not a bot" in detail or "Sign in to confirm" in detail):
             raise HTTPException(
                 status_code=502,
                 detail=(
                     "YouTube blocked the server (bot check). Add a cookies.txt "
-                    "Secret File on the host to enable YouTube. Other sites still work."
+                    "Secret File to enable YouTube. Other sites still work."
                 ),
             )
         raise HTTPException(status_code=502, detail=f"yt-dlp failed: {detail}")
