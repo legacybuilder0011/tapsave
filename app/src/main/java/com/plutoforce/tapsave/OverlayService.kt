@@ -79,7 +79,7 @@ class OverlayService : Service() {
         iconView = view.findViewById(R.id.bubbleIcon)
         progressView = view.findViewById(R.id.bubbleProgress)
 
-        val size = dp(56)
+        val size = dp(44)
         val params = WindowManager.LayoutParams(
             size,
             size,
