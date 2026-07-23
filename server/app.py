@@ -206,12 +206,12 @@ def download(
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.decode(errors="ignore") if exc.stderr else "unknown error"
         detail = detail[-1500:] if debug else detail[-400:]
-        if not has_cookies and ("not a bot" in detail or "Sign in to confirm" in detail):
+        if "not a bot" in detail or "Sign in to confirm" in detail:
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    "YouTube blocked the server (bot check). Add a cookies.txt "
-                    "Secret File to enable YouTube. Other sites still work."
+                    "YouTube can't be downloaded from this server — Google blocks "
+                    "cloud hosts. TikTok, Instagram and Pinterest work fine."
                 ),
             )
         raise HTTPException(status_code=502, detail=f"yt-dlp failed: {detail}")
