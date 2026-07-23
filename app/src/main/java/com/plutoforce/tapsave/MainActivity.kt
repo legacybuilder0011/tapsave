@@ -12,7 +12,10 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 
@@ -44,6 +47,35 @@ class MainActivity : Activity() {
         }
         findViewById<Button>(R.id.updateButton).setOnClickListener {
             checkForUpdate(userInitiated = true)
+        }
+
+        // Quality + audio preferences (used for every download).
+        val qualityGroup = findViewById<RadioGroup>(R.id.qualityGroup)
+        val audioOnly = findViewById<CheckBox>(R.id.audioOnly)
+        val checkedId = when (Prefs.quality(this)) {
+            "medium" -> R.id.qMedium
+            "low" -> R.id.qLow
+            else -> R.id.qHigh
+        }
+        findViewById<RadioButton>(checkedId).isChecked = true
+        audioOnly.isChecked = Prefs.audioOnly(this)
+
+        qualityGroup.setOnCheckedChangeListener { _, id ->
+            Prefs.setQuality(
+                this,
+                when (id) {
+                    R.id.qMedium -> "medium"
+                    R.id.qLow -> "low"
+                    else -> "high"
+                }
+            )
+        }
+        audioOnly.setOnCheckedChangeListener { _, isChecked ->
+            Prefs.setAudioOnly(this, isChecked)
+        }
+
+        findViewById<Button>(R.id.historyButton).setOnClickListener {
+            startActivity(Intent(this, DownloadHistoryActivity::class.java))
         }
 
         maybeRequestNotifications()

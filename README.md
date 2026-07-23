@@ -2,7 +2,7 @@
 
 A standalone Android video downloader. Copy a video link (TikTok, Instagram,
 YouTube, Pinterest, …), tap the floating button, and the video is saved to your
-phone's `Downloads/TapSave` folder. Links can also be sent in via the Share
+phone's Gallery (`Movies/TapSave`, or `Music/TapSave` for audio). Links can also be sent in via the Share
 sheet.
 
 TapSave has **no accessibility service** on purpose — Google restricts
@@ -33,7 +33,8 @@ phone can reach and paste its address into the app.
 3. In the app: set the **Server address**, grant **display over other apps**,
    and **Start floating button**.
 4. Copy a video link (or Share → TapSave), tap the floating button → it
-   downloads and saves to `Downloads/TapSave`.
+   downloads (with a progress %) and saves to your Gallery (`Movies/TapSave`).
+   Pick quality or Audio-only (MP3) in the app; see past downloads in Download history.
 
 ## Build
 

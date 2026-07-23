@@ -24,4 +24,15 @@
         android:indeterminateTint="#FFFFFF"
         android:visibility="gone" />
 
+    <TextView
+        android:id="@+id/bubblePercent"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
 </FrameLayout>

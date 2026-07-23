@@ -8,5 +8,14 @@
     <string name="start_button">Start floating button</string>
     <string name="stop_button">Stop floating button</string>
     <string name="check_updates">Check for updates</string>
-    <string name="how_to">How to use:\n1. Run the TapSave backend and put its address above.\n2. Grant the overlay permission and start the floating button.\n3. In TikTok/Instagram/YouTube/Pinterest, copy the video link (or Share to TapSave).\n4. Tap the floating button — it downloads and saves to Downloads/TapSave.\n\nFor content you own or have permission to download.</string>
+    <string name="quality_label">Quality</string>
+    <string name="quality_high">High</string>
+    <string name="quality_medium">720p</string>
+    <string name="quality_low">480p</string>
+    <string name="audio_only">Audio only (MP3)</string>
+    <string name="open_downloads">Download history</string>
+    <string name="history_title">Downloads</string>
+    <string name="clear_all">Clear list</string>
+    <string name="history_empty">Nothing downloaded yet. Your saved videos and audio show up here.</string>
+    <string name="how_to">How to use:\n1. Run the TapSave backend and put its address above.\n2. Pick quality (or Audio only) — used for every download.\n3. Grant the overlay permission and start the floating button.\n4. In TikTok/Instagram/Pinterest, copy the video link (or Share to TapSave).\n5. Tap the floating button — it shows progress, then saves to your Gallery (Movies/TapSave) or Music/TapSave.\n\nFor content you own or have permission to download.</string>
 </resources>

@@ -40,14 +40,18 @@ INDEX_HTML = """<!doctype html>
           padding: 28px; box-shadow: 0 12px 40px rgba(0,0,0,.4); }
   h1 { margin: 0 0 6px; font-size: 26px; }
   p.sub { margin: 0 0 20px; color: #a7a7b4; font-size: 14px; }
-  input { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #35354a;
+  input, select { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #35354a;
           background: #12121a; color: #fff; font-size: 15px; }
+  .row { display: flex; gap: 10px; margin-top: 12px; align-items: center; }
+  .row label { font-size: 14px; color: #c9c9d6; white-space: nowrap; }
   button { width: 100%; margin-top: 12px; padding: 14px; border: 0; border-radius: 10px;
            background: #6c4dff; color: #fff; font-size: 16px; font-weight: 600;
            cursor: pointer; }
   button.secondary { background: #2a2a38; }
   button:disabled { opacity: .6; cursor: default; }
-  #status { margin-top: 16px; font-size: 14px; min-height: 20px; color: #c9c9d6; }
+  #bar { height: 8px; background: #2a2a38; border-radius: 6px; margin-top: 16px; overflow: hidden; display: none; }
+  #barFill { height: 100%; width: 0%; background: #6c4dff; transition: width .2s; }
+  #status { margin-top: 12px; font-size: 14px; min-height: 20px; color: #c9c9d6; }
   .note { margin-top: 18px; font-size: 12px; color: #7d7d8c; line-height: 1.5; }
 </style>
 </head>
@@ -57,7 +61,20 @@ INDEX_HTML = """<!doctype html>
     <p class="sub">Paste a video link (TikTok, Instagram, YouTube, Pinterest) and download it.</p>
     <button id="paste">📋 Paste link &amp; download</button>
     <input id="url" type="url" placeholder="or paste the link here…" autocomplete="off">
+    <div class="row">
+      <label for="quality">Quality</label>
+      <select id="quality">
+        <option value="high">High</option>
+        <option value="medium">Medium (720p)</option>
+        <option value="low">Data saver (480p)</option>
+      </select>
+    </div>
+    <div class="row">
+      <input type="checkbox" id="audio" style="width:auto">
+      <label for="audio">Audio only (MP3)</label>
+    </div>
     <button id="go" class="secondary">Download</button>
+    <div id="bar"><div id="barFill"></div></div>
     <div id="status"></div>
     <p class="note">For content you own or have permission to download. First download
       after a while can take ~1 minute while the server wakes up.</p>
@@ -67,6 +84,16 @@ INDEX_HTML = """<!doctype html>
   const goBtn = document.getElementById('go');
   const pasteBtn = document.getElementById('paste');
   const statusEl = document.getElementById('status');
+  const qualitySel = document.getElementById('quality');
+  const audioChk = document.getElementById('audio');
+  const bar = document.getElementById('bar');
+  const barFill = document.getElementById('barFill');
+
+  function setProgress(pct) {
+    if (pct == null) { bar.style.display = 'none'; return; }
+    bar.style.display = 'block';
+    barFill.style.width = pct + '%';
+  }
 
   async function pasteAndDownload() {
     try {
@@ -84,22 +111,38 @@ INDEX_HTML = """<!doctype html>
     const url = urlInput.value.trim();
     if (!url) { statusEl.textContent = 'Paste a link first.'; return; }
     goBtn.disabled = true;
-    statusEl.textContent = 'Working… fetching the video (this can take a bit).';
+    setProgress(null);
+    statusEl.textContent = 'Working… preparing the download (this can take a bit).';
+    const audio = audioChk.checked;
+    const q = 'download?url=' + encodeURIComponent(url) + '&quality=' + qualitySel.value + (audio ? '&audio=1' : '');
     try {
-      const resp = await fetch('/download?url=' + encodeURIComponent(url));
+      const resp = await fetch('/' + q);
       if (!resp.ok) {
         const text = await resp.text();
         statusEl.textContent = 'Error: ' + text.slice(0, 200);
         return;
       }
-      const blob = await resp.blob();
+      const total = parseInt(resp.headers.get('Content-Length') || '0', 10);
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let received = 0;
+      statusEl.textContent = 'Downloading…';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (total) setProgress(Math.round((received / total) * 100));
+      }
+      const blob = new Blob(chunks);
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'video_' + Date.now() + '.mp4';
+      link.download = (audio ? 'audio_' : 'video_') + Date.now() + (audio ? '.mp3' : '.mp4');
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(link.href);
+      setProgress(100);
       statusEl.textContent = 'Done! Check your downloads folder.';
     } catch (e) {
       statusEl.textContent = 'Error: ' + e;
@@ -120,10 +163,13 @@ INDEX_HTML = """<!doctype html>
 def index():
     return INDEX_HTML
 
-# Prefer the best video+audio and merge to mp4 so the phone gets one
-# ready-to-play file. For TikTok, yt-dlp already returns the no-watermark
-# rendition. Falls back to any best single stream if a merge isn't possible.
-YTDLP_FORMAT = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b"
+# Video format per requested quality. Prefer mp4 and merge so the device gets
+# one ready-to-play file; fall back to any best stream.
+QUALITY_FORMATS = {
+    "high": "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b",
+    "medium": "bv*[height<=720][ext=mp4]+ba/b[height<=720][ext=mp4]/b[height<=720]/b",
+    "low": "bv*[height<=480][ext=mp4]+ba/b[height<=480][ext=mp4]/b[height<=480]/b",
+}
 
 # YouTube blocks the default web client from server IPs ("Sign in to confirm
 # you're not a bot"). Which clients work depends on whether we have cookies:
@@ -164,6 +210,8 @@ def diag():
 @app.get("/download")
 def download(
     url: str = Query(..., description="Public video URL to fetch"),
+    audio: bool = Query(False, description="Download audio only (mp3)"),
+    quality: str = Query("high", description="high | medium | low"),
     debug: bool = Query(False, description="Return more of the yt-dlp error"),
 ):
     if not (url.startswith("http://") or url.startswith("https://")):
@@ -178,16 +226,22 @@ def download(
         "--no-playlist",
         "--no-warnings",
         "--force-ipv4",
-        "-f",
-        YTDLP_FORMAT,
-        "--merge-output-format",
-        "mp4",
         "--extractor-args",
         YT_ARGS_WITH_COOKIES if has_cookies else YT_ARGS_NO_COOKIES,
         "-o",
         output_template,
-        url,
     ]
+    if audio:
+        # Extract audio to mp3.
+        cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "mp3"]
+    else:
+        cmd += [
+            "-f",
+            QUALITY_FORMATS.get(quality, QUALITY_FORMATS["high"]),
+            "--merge-output-format",
+            "mp4",
+        ]
+    cmd.append(url)
 
     # yt-dlp writes the cookie jar back to the --cookies path, but a Render
     # Secret File is read-only, so copy it into the writable work dir first.
@@ -223,6 +277,6 @@ def download(
     path = max(files, key=os.path.getsize)
     return FileResponse(
         path,
-        media_type="video/mp4",
+        media_type="audio/mpeg" if audio else "video/mp4",
         filename=os.path.basename(path),
     )

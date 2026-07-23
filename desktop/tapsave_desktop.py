@@ -18,8 +18,11 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+import os
+
 DEFAULT_BACKEND = "https://tapsave-backend.onrender.com"
 CONFIG_FILE = Path.home() / ".tapsave.json"
+HISTORY_FILE = Path.home() / ".tapsave_history.json"
 URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 # Update checking against the same GitHub release the phone app uses.
@@ -41,16 +44,32 @@ COLOR_OK = "#22c55e"
 COLOR_ERR = "#ef4444"
 
 
-def load_backend() -> str:
+def load_config() -> dict:
     try:
-        return json.loads(CONFIG_FILE.read_text()).get("backend", DEFAULT_BACKEND)
+        return json.loads(CONFIG_FILE.read_text())
     except Exception:
-        return DEFAULT_BACKEND
+        return {}
 
 
-def save_backend(value: str) -> None:
+def save_config(cfg: dict) -> None:
     try:
-        CONFIG_FILE.write_text(json.dumps({"backend": value}))
+        CONFIG_FILE.write_text(json.dumps(cfg))
+    except Exception:
+        pass
+
+
+def load_history() -> list:
+    try:
+        return json.loads(HISTORY_FILE.read_text())
+    except Exception:
+        return []
+
+
+def add_history(entry: dict) -> None:
+    items = load_history()
+    items.insert(0, entry)
+    try:
+        HISTORY_FILE.write_text(json.dumps(items[:200]))
     except Exception:
         pass
 
@@ -58,12 +77,16 @@ def save_backend(value: str) -> None:
 class FloatingButton:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.backend = load_backend()
+        self.config = load_config()
+        self.backend = self.config.get("backend", DEFAULT_BACKEND)
         self.busy = False
         self._start = (0, 0)
         self._orig = (0, 0)
         self._moved = False
         self._down = 0.0
+        self.percent_id = None
+        self.quality_var = tk.StringVar(value=self.config.get("quality", "high"))
+        self.audio_var = tk.BooleanVar(value=self.config.get("audio", False))
 
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -87,6 +110,17 @@ class FloatingButton:
         self.canvas.bind("<ButtonPress-3>", self.show_menu)
 
         self.menu = tk.Menu(root, tearoff=0)
+        quality_menu = tk.Menu(self.menu, tearoff=0)
+        for label, val in (("High", "high"), ("720p", "medium"), ("480p", "low")):
+            quality_menu.add_radiobutton(
+                label=label, value=val, variable=self.quality_var, command=self.save_prefs
+            )
+        self.menu.add_cascade(label="Quality", menu=quality_menu)
+        self.menu.add_checkbutton(
+            label="Audio only (MP3)", variable=self.audio_var, command=self.save_prefs
+        )
+        self.menu.add_command(label="Download history…", command=self.show_history)
+        self.menu.add_separator()
         self.menu.add_command(label="Server address…", command=self.edit_backend)
         self.menu.add_command(label="Check for updates", command=lambda: self.check_update(True))
         self.menu.add_separator()
@@ -134,8 +168,30 @@ class FloatingButton:
             cx - 13, 52, cx + 13, 52, fill="#ffffff", width=4, tags="arrow"
         )
 
+    def save_prefs(self):
+        self.config["backend"] = self.backend
+        self.config["quality"] = self.quality_var.get()
+        self.config["audio"] = bool(self.audio_var.get())
+        save_config(self.config)
+
     def set_color(self, color: str):
         self.root.after(0, lambda: self.canvas.itemconfig(self.circle, fill=color))
+
+    def set_percent(self, pct):
+        """Show a percentage in the middle of the button (None clears it)."""
+        def apply():
+            if self.percent_id is not None:
+                self.canvas.delete(self.percent_id)
+                self.percent_id = None
+            if pct is None:
+                self.canvas.itemconfigure("arrow", state="normal")
+            else:
+                self.canvas.itemconfigure("arrow", state="hidden")
+                self.percent_id = self.canvas.create_text(
+                    SIZE / 2, SIZE / 2, text=f"{pct}%", fill="#ffffff",
+                    font=("Segoe UI", 11, "bold"),
+                )
+        self.root.after(0, apply)
 
     # --- drag vs click ---
     def on_press(self, e):
@@ -189,10 +245,54 @@ class FloatingButton:
 
         def save():
             self.backend = entry.get().strip()
-            save_backend(self.backend)
+            self.save_prefs()
             top.destroy()
 
         tk.Button(top, text="Save", command=save).pack(pady=12)
+
+    def show_history(self):
+        top = tk.Toplevel(self.root)
+        top.title("TapSave downloads")
+        top.attributes("-topmost", True)
+        top.geometry("460x320")
+
+        listbox = tk.Listbox(top, font=("Segoe UI", 10))
+        listbox.pack(fill="both", expand=True, padx=10, pady=10)
+        entries = load_history()
+        for e in entries:
+            tag = "🎵" if e.get("audio") else "🎬"
+            listbox.insert("end", f"{tag}  {e.get('name', '')}")
+
+        def selected_path():
+            sel = listbox.curselection()
+            if not sel:
+                return None
+            return entries[sel[0]].get("path")
+
+        def open_file():
+            path = selected_path()
+            if not path:
+                return
+            try:
+                os.startfile(path)  # type: ignore[attr-defined]
+            except Exception:
+                webbrowser.open("file://" + str(path))
+
+        def open_folder():
+            path = selected_path()
+            if not path:
+                return
+            folder = str(Path(path).parent)
+            try:
+                os.startfile(folder)  # type: ignore[attr-defined]
+            except Exception:
+                webbrowser.open("file://" + folder)
+
+        bar = tk.Frame(top)
+        bar.pack(fill="x", padx=10, pady=(0, 10))
+        tk.Button(bar, text="Open file", command=open_file).pack(side="left")
+        tk.Button(bar, text="Open folder", command=open_folder).pack(side="left", padx=6)
+        tk.Button(bar, text="Close", command=top.destroy).pack(side="right")
 
     def clipboard_text(self) -> str:
         try:
@@ -213,33 +313,57 @@ class FloatingButton:
         threading.Thread(target=self.download, args=(match.group(0),), daemon=True).start()
 
     def download(self, video_url: str):
+        audio = bool(self.audio_var.get())
+        quality = self.quality_var.get()
         try:
             base = self.backend.strip().rstrip("/")
             if not base:
                 self.toast("Set the server address (right-click → Server address).", COLOR_ERR)
                 return
-            endpoint = base + "/download?url=" + urllib.parse.quote(video_url, safe="")
+            endpoint = (
+                base + "/download?url=" + urllib.parse.quote(video_url, safe="")
+                + "&quality=" + quality + ("&audio=1" if audio else "")
+            )
             out_dir = Path.home() / "Downloads" / "TapSave"
             out_dir.mkdir(parents=True, exist_ok=True)
-            out_file = out_dir / f"video_{int(time.time())}.mp4"
+            ext = ".mp3" if audio else ".mp4"
+            out_file = out_dir / f"{'audio' if audio else 'video'}_{int(time.time())}{ext}"
 
             request = urllib.request.Request(endpoint, headers={"User-Agent": "TapSave-Desktop"})
             with urllib.request.urlopen(request, timeout=600) as resp, open(out_file, "wb") as f:
+                total = int(resp.headers.get("Content-Length") or 0)
+                received = 0
+                last = -1
                 while True:
                     chunk = resp.read(65536)
                     if not chunk:
                         break
                     f.write(chunk)
+                    received += len(chunk)
+                    if total:
+                        pct = int(received * 100 / total)
+                        if pct != last:
+                            last = pct
+                            self.set_percent(pct)
+            self.set_percent(None)
             self.set_color(COLOR_OK)
+            add_history({
+                "name": out_file.name,
+                "path": str(out_file),
+                "audio": audio,
+                "time": int(time.time()),
+            })
             self.toast(f"Saved to {out_file.parent}", COLOR_OK)
         except urllib.error.HTTPError as e:
             try:
                 body = e.read().decode("utf-8", "ignore")
             except Exception:
                 body = ""
+            self.set_percent(None)
             self.set_color(COLOR_ERR)
             self.toast(f"Error {e.code}: {body[:160]}", COLOR_ERR)
         except Exception as e:
+            self.set_percent(None)
             self.set_color(COLOR_ERR)
             self.toast("Error: " + str(e)[:160], COLOR_ERR)
         finally:

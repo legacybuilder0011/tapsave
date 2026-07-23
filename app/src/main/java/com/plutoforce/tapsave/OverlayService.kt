@@ -18,6 +18,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
 
@@ -44,6 +45,7 @@ class OverlayService : Service() {
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var iconView: ImageView? = null
     private var progressView: ProgressBar? = null
+    private var percentView: TextView? = null
 
     @Volatile
     private var isDownloading = false
@@ -78,6 +80,7 @@ class OverlayService : Service() {
         val view = LayoutInflater.from(this).inflate(R.layout.bubble, null)
         iconView = view.findViewById(R.id.bubbleIcon)
         progressView = view.findViewById(R.id.bubbleProgress)
+        percentView = view.findViewById(R.id.bubblePercent)
 
         val size = dp(44)
         val params = WindowManager.LayoutParams(
@@ -113,34 +116,59 @@ class OverlayService : Service() {
             return
         }
 
+        val audio = Prefs.audioOnly(this)
+        val quality = Prefs.quality(this)
+
         isDownloading = true
-        setLoading(true)
-        toast("Downloading…")
+        setPreparing()
+        toast(if (audio) "Downloading audio…" else "Downloading…")
 
         Thread {
-            val result = VideoDownloader.download(applicationContext, backend, url)
+            val result = VideoDownloader.download(
+                applicationContext, backend, url, audio, quality
+            ) { pct -> handler.post { setPercent(pct) } }
             handler.post {
                 isDownloading = false
-                setLoading(false)
                 if (result.ok) {
+                    if (result.uri != null && result.name != null) {
+                        DownloadStore.add(this, result.name, url, result.uri, result.audio)
+                    }
                     showSuccessThenIdle()
+                } else {
+                    setIdle()
                 }
                 toast(result.message)
             }
         }.start()
     }
 
-    private fun setLoading(loading: Boolean) {
-        iconView?.visibility = if (loading) View.GONE else View.VISIBLE
-        progressView?.visibility = if (loading) View.VISIBLE else View.GONE
+    /** Connecting / preparing: spinner, no percentage yet. */
+    private fun setPreparing() {
+        iconView?.visibility = View.GONE
+        progressView?.visibility = View.VISIBLE
+        percentView?.visibility = View.GONE
+    }
+
+    private fun setPercent(pct: Int) {
+        progressView?.visibility = View.GONE
+        iconView?.visibility = View.GONE
+        percentView?.visibility = View.VISIBLE
+        percentView?.text = "$pct%"
+    }
+
+    private fun setIdle() {
+        percentView?.visibility = View.GONE
+        progressView?.visibility = View.GONE
         iconView?.setImageResource(R.drawable.ic_download)
+        iconView?.visibility = View.VISIBLE
     }
 
     private fun showSuccessThenIdle() {
+        percentView?.visibility = View.GONE
+        progressView?.visibility = View.GONE
         iconView?.setImageResource(R.drawable.ic_check)
         iconView?.visibility = View.VISIBLE
-        progressView?.visibility = View.GONE
-        handler.postDelayed({ iconView?.setImageResource(R.drawable.ic_download) }, 1600L)
+        handler.postDelayed({ setIdle() }, 1600L)
     }
 
     private fun buildNotification(): Notification {

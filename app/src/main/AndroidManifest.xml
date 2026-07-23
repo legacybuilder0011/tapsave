@@ -38,6 +38,10 @@
             android:taskAffinity=""
             android:theme="@style/Theme.TapSave.Transparent" />
 
+        <activity
+            android:name=".DownloadHistoryActivity"
+            android:exported="false" />
+
         <service
             android:name=".OverlayService"
             android:exported="false"
