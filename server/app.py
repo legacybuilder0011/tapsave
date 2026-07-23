@@ -12,6 +12,7 @@ platform's Terms of Service and the creator's copyright.
 
 import glob
 import os
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -164,8 +165,15 @@ def download(url: str = Query(..., description="Public video URL to fetch")):
     ]
 
     # Use cookies when available (needed for YouTube from a datacenter IP).
+    # yt-dlp writes the cookie jar back to the file, but a Render Secret File is
+    # read-only, so copy it into the writable work dir first.
     if os.path.exists(COOKIES_FILE):
-        cmd += ["--cookies", COOKIES_FILE]
+        writable_cookies = os.path.join(workdir, "cookies.txt")
+        try:
+            shutil.copyfile(COOKIES_FILE, writable_cookies)
+            cmd += ["--cookies", writable_cookies]
+        except OSError:
+            pass
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=300)
