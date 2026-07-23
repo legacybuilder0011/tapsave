@@ -216,9 +216,14 @@ class OverlayService : Service() {
             return
         }
         // A transparent activity has window focus, so it can read the clipboard
-        // (background services cannot on Android 10+).
+        // (background services cannot on Android 10+). It lives in its own task
+        // (empty taskAffinity) and is excluded from recents with no animation, so
+        // after it reads the clipboard the user returns to the app they were in
+        // instead of the TapSave screen.
         val intent = Intent(this, ClipboardTapActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            .addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
         startActivity(intent)
     }
 }

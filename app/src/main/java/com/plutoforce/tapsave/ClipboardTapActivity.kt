@@ -59,5 +59,6 @@ class ClipboardTapActivity : Activity() {
             startForegroundService(intent)
         }
         finish()
+        overridePendingTransition(0, 0)
     }
 }

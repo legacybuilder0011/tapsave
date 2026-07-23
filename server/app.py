@@ -21,9 +21,14 @@ from fastapi.responses import FileResponse
 
 app = FastAPI(title="TapSave backend")
 
-# yt-dlp already returns the no-watermark rendition for TikTok. We prefer a
-# single progressive mp4 so the phone gets one ready-to-play file.
-YTDLP_FORMAT = "mp4/best[ext=mp4]/best"
+# Prefer the best video+audio and merge to mp4 so the phone gets one
+# ready-to-play file. For TikTok, yt-dlp already returns the no-watermark
+# rendition. Falls back to any best single stream if a merge isn't possible.
+YTDLP_FORMAT = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b"
+
+# YouTube blocks the default web client from server IPs ("Sign in to confirm
+# you're not a bot"). The android/ios players usually work without cookies.
+YOUTUBE_EXTRACTOR_ARGS = "youtube:player_client=android,ios,web"
 
 
 @app.get("/health")
@@ -43,8 +48,13 @@ def download(url: str = Query(..., description="Public video URL to fetch")):
         "yt-dlp",
         "--no-playlist",
         "--no-warnings",
+        "--force-ipv4",
         "-f",
         YTDLP_FORMAT,
+        "--merge-output-format",
+        "mp4",
+        "--extractor-args",
+        YOUTUBE_EXTRACTOR_ARGS,
         "-o",
         output_template,
         url,
