@@ -25,6 +25,9 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
       - name: Build the debug APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
         run: ./gradlew assembleDebug --no-daemon
       - name: Collect the APK
         run: cp app/build/outputs/apk/debug/app-debug.apk TapSave.apk
@@ -64,12 +67,18 @@ jobs:
         with:
           name: exe
           path: .
-      - name: Publish both to a downloadable Release
+      - name: Write version.json for the in-app updater
+        run: |
+          cat > version.json <<EOF
+          {"versionCode": ${{ github.run_number }}, "versionName": "1.0.${{ github.run_number }}", "apk": "https://github.com/${{ github.repository }}/releases/download/latest/TapSave.apk"}
+          EOF
+          cat version.json
+      - name: Publish everything to a downloadable Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release delete latest --yes --cleanup-tag -R ${{ github.repository }} 2>/dev/null || true
-          gh release create latest TapSave.apk TapSave.exe \
+          gh release create latest TapSave.apk TapSave.exe version.json \
             -R ${{ github.repository }} \
             --title "TapSave (latest build)" \
-            --notes "**TapSave.apk** — Android app. **TapSave.exe** — Windows desktop app (floating window; double-click to run, no install). Both need the yt-dlp backend in /server running and its address set. You can also just open the backend URL in any browser. For content you own or have permission to download."
+            --notes "**TapSave.apk** — Android app (self-updates via Check for updates). **TapSave.exe** — Windows desktop app (floating button; double-click to run, no install). Both need the yt-dlp backend in /server running and its address set. You can also just open the backend URL in any browser. For content you own or have permission to download."
