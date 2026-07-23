@@ -15,11 +15,23 @@ import tkinter as tk
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 DEFAULT_BACKEND = "https://tapsave-backend.onrender.com"
 CONFIG_FILE = Path.home() / ".tapsave.json"
 URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+
+# Update checking against the same GitHub release the phone app uses.
+VERSION_JSON_URL = "https://github.com/legacybuilder0011/tapsave/releases/download/latest/version.json"
+EXE_URL = "https://github.com/legacybuilder0011/tapsave/releases/download/latest/TapSave.exe"
+
+# Build number is stamped in by CI (desktop/_build_version.py); 0 when running
+# from source locally.
+try:
+    from _build_version import BUILD as LOCAL_BUILD
+except Exception:
+    LOCAL_BUILD = 0
 
 SIZE = 64
 TRANSPARENT = "#ff00ff"  # made see-through on Windows so the window looks round
@@ -76,8 +88,40 @@ class FloatingButton:
 
         self.menu = tk.Menu(root, tearoff=0)
         self.menu.add_command(label="Server address…", command=self.edit_backend)
+        self.menu.add_command(label="Check for updates", command=lambda: self.check_update(True))
         self.menu.add_separator()
         self.menu.add_command(label="Quit", command=root.destroy)
+
+        # Quietly check for a newer version shortly after launch.
+        root.after(1500, lambda: self.check_update(False))
+
+    def check_update(self, user_initiated: bool):
+        def work():
+            latest = None
+            try:
+                req = urllib.request.Request(VERSION_JSON_URL, headers={"User-Agent": "TapSave"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    latest = json.loads(r.read().decode("utf-8", "ignore"))
+            except Exception:
+                latest = None
+
+            def done():
+                if not latest:
+                    if user_initiated:
+                        self.toast("Couldn't check for updates.", COLOR_ERR)
+                    return
+                if int(latest.get("versionCode", 0)) > LOCAL_BUILD:
+                    self.toast("Update available — opening download…", COLOR_IDLE)
+                    try:
+                        webbrowser.open(EXE_URL)
+                    except Exception:
+                        pass
+                elif user_initiated:
+                    self.toast("You're on the latest version.", COLOR_OK)
+
+            self.root.after(0, done)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _draw_arrow(self):
         cx = SIZE / 2

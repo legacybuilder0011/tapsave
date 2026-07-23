@@ -47,8 +47,11 @@ jobs:
           python-version: '3.12'
       - name: Install PyInstaller
         run: pip install pyinstaller
+      - name: Stamp desktop build version
+        shell: bash
+        run: echo "BUILD = ${{ github.run_number }}" > desktop/_build_version.py
       - name: Build the desktop .exe
-        run: pyinstaller --onefile --windowed --name TapSave desktop/tapsave_desktop.py
+        run: pyinstaller --onefile --windowed --name TapSave --paths desktop desktop/tapsave_desktop.py
       - uses: actions/upload-artifact@v4
         with:
           name: exe
