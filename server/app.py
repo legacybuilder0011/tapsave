@@ -173,10 +173,14 @@ def index():
 
 # Video format per requested quality. Prefer mp4 and merge so the device gets
 # one ready-to-play file; fall back to any best stream.
+# Prefer H.264 (avc). TikTok's H.265/"bytevc1" streams play with NO audio in most
+# phone galleries and players, so we pick H.264 first and only fall back to
+# merging or other codecs when no H.264 stream exists.
+_AVC = "vcodec~='^(avc|h264)'"
 QUALITY_FORMATS = {
-    "high": "bv*+ba/b",
-    "medium": "bv*[height<=720]+ba/b[height<=720]/b",
-    "low": "bv*[height<=480]+ba/b[height<=480]/b",
+    "high": f"b[{_AVC}]/bv*[{_AVC}]+ba/bv*+ba/b",
+    "medium": f"b[{_AVC}][height<=720]/b[height<=720]/bv*[height<=720]+ba/b",
+    "low": f"b[{_AVC}][height<=480]/b[height<=480]/bv*[height<=480]+ba/b",
 }
 
 # YouTube blocks the default web client from server IPs ("Sign in to confirm
