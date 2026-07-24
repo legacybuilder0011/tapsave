@@ -174,12 +174,14 @@ def index():
 
 # Video format per requested quality. Prefer mp4 and merge so the device gets
 # one ready-to-play file; fall back to any best stream.
-# Highest resolution per quality (any codec). H.265 results are transcoded to
-# H.264 afterwards (see maybe_transcode) so they keep audio and play everywhere.
+# Prefer H.264 (fast, plays with audio everywhere, no re-encoding). Only fall
+# back to other codecs (e.g. H.265) when no H.264 stream exists — those rare
+# cases get transcoded afterwards (see maybe_transcode).
+_AVC = "vcodec~='^(avc|h264)'"
 QUALITY_FORMATS = {
-    "high": "bv*+ba/b",
-    "medium": "bv*[height<=720]+ba/b[height<=720]/b",
-    "low": "bv*[height<=480]+ba/b[height<=480]/b",
+    "high": f"b[{_AVC}]/bv*[{_AVC}]+ba/bv*+ba/b",
+    "medium": f"b[{_AVC}][height<=720]/b[height<=720]/bv*[height<=720]+ba/b",
+    "low": f"b[{_AVC}][height<=480]/b[height<=480]/bv*[height<=480]+ba/b",
 }
 
 
@@ -204,7 +206,7 @@ def maybe_transcode(path: str, workdir: str) -> str:
         subprocess.run(
             [
                 FFMPEG_LOCATION, "-y", "-i", path,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
                 "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out,
             ],
             check=True, capture_output=True, timeout=280,
