@@ -74,6 +74,10 @@ class MainActivity : Activity() {
             Prefs.setAudioOnly(this, isChecked)
         }
 
+        findViewById<Button>(R.id.statusButton).setOnClickListener {
+            startActivity(Intent(this, StatusActivity::class.java))
+        }
+
         findViewById<Button>(R.id.historyButton).setOnClickListener {
             startActivity(Intent(this, DownloadHistoryActivity::class.java))
         }

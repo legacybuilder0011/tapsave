@@ -18,4 +18,21 @@
     <string name="clear_all">Clear list</string>
     <string name="history_empty">Nothing downloaded yet. Your saved videos and audio show up here.</string>
     <string name="how_to">How to use:\n1. Run the TapSave backend and put its address above.\n2. Pick quality (or Audio only) — used for every download.\n3. Grant the overlay permission and start the floating button.\n4. In TikTok/Instagram/Pinterest, copy the video link (or Share to TapSave).\n5. Tap the floating button — it shows progress, then saves to your Gallery (Movies/TapSave) or Music/TapSave.\n\nFor content you own or have permission to download.</string>
+
+    <!-- WhatsApp Status Saver -->
+    <string name="open_status">WhatsApp Status Saver</string>
+    <string name="status_title">WhatsApp statuses</string>
+    <string name="status_hint">Tap a status to save it to your gallery. Long-press to open it. View a contact\'s status in WhatsApp first so it shows up here.</string>
+    <string name="status_save_all">Save all</string>
+    <string name="status_none">No statuses right now. Open a contact\'s status in WhatsApp, then come back — recently viewed photos and videos will appear here.</string>
+    <string name="status_no_folder">No WhatsApp status folder found yet. Make sure WhatsApp is installed and you\'ve opened at least one status, then reopen this screen.</string>
+    <string name="status_grant_access">Grant access</string>
+    <string name="status_access_title">Allow access to statuses</string>
+    <string name="status_access_message">To find WhatsApp statuses, TapSave needs permission to read files on your phone. On the next screen, turn on "Allow access to manage all files".</string>
+    <string name="status_open_settings">Open settings</string>
+    <string name="status_saved_one">Saved to Gallery (TapSave)</string>
+    <string name="status_saved_all">Saved %1$d to Gallery (TapSave)</string>
+    <string name="status_saving_all">Saving %1$d statuses…</string>
+    <string name="status_save_failed">Couldn\'t save that one</string>
+    <string name="status_open_failed">Couldn\'t open that status</string>
 </resources>

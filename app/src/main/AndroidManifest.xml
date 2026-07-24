@@ -8,10 +8,19 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Reading WhatsApp statuses off shared storage. MANAGE_EXTERNAL_STORAGE
+         covers Android 11+ (statuses live under Android/media); READ_EXTERNAL_STORAGE
+         with requestLegacyExternalStorage covers Android 10. -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher_tapsave"
         android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.TapSave">
 
@@ -40,6 +49,10 @@
 
         <activity
             android:name=".DownloadHistoryActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".StatusActivity"
             android:exported="false" />
 
         <service
