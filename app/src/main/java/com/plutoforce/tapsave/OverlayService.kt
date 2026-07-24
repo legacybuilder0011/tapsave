@@ -31,6 +31,7 @@ class OverlayService : Service() {
 
     companion object {
         const val ACTION_DOWNLOAD = "com.plutoforce.tapsave.DOWNLOAD"
+        const val ACTION_SAVE_STATUS = "com.plutoforce.tapsave.SAVE_STATUS"
         const val ACTION_SHOW = "com.plutoforce.tapsave.SHOW"
         const val EXTRA_URL = "url"
 
@@ -61,9 +62,12 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         showBubble()
-        if (intent?.action == ACTION_DOWNLOAD) {
-            val url = intent.getStringExtra(EXTRA_URL)
-            if (!url.isNullOrBlank()) startDownload(url)
+        when (intent?.action) {
+            ACTION_DOWNLOAD -> {
+                val url = intent.getStringExtra(EXTRA_URL)
+                if (!url.isNullOrBlank()) startDownload(url)
+            }
+            ACTION_SAVE_STATUS -> startStatusSave()
         }
         return START_STICKY
     }
@@ -119,6 +123,10 @@ class OverlayService : Service() {
         val audio = Prefs.audioOnly(this)
         val quality = Prefs.quality(this)
 
+        // Remember this link so tapping the button again (e.g. to save a
+        // WhatsApp status) doesn't re-download the same stale link.
+        Prefs.setLastDownloadedUrl(this, url)
+
         isDownloading = true
         setPreparing()
         toast(if (audio) "Downloading audio…" else "Downloading…")
@@ -138,6 +146,38 @@ class OverlayService : Service() {
                     setIdle()
                 }
                 toast(result.message)
+            }
+        }.start()
+    }
+
+    /** Saves the WhatsApp status currently being viewed (the newest one). */
+    private fun startStatusSave() {
+        if (isDownloading) {
+            toast("Busy — try again in a second")
+            return
+        }
+        if (!StatusSaver.hasAccess(this)) {
+            toast("Open TapSave → WhatsApp Status Saver and allow file access first")
+            return
+        }
+        val status = StatusSaver.newest()
+        if (status == null) {
+            toast("No status found — open a status in WhatsApp, then tap")
+            return
+        }
+
+        isDownloading = true
+        setPreparing()
+        toast(if (status.isVideo) "Saving status video…" else "Saving status photo…")
+
+        Thread {
+            val ok = StatusSaver.save(applicationContext, status) { pct ->
+                handler.post { setPercent(pct) }
+            }
+            handler.post {
+                isDownloading = false
+                if (ok) showSuccessThenIdle() else setIdle()
+                toast(if (ok) "Saved to Gallery (TapSave)" else "Couldn't save that status")
             }
         }.start()
     }
@@ -188,7 +228,7 @@ class OverlayService : Service() {
         }
         return builder
             .setContentTitle("TapSave is running")
-            .setContentText("Tap the floating button after copying a video link")
+            .setContentText("Tap the button to save the status you're viewing, or a copied video link")
             .setSmallIcon(R.drawable.ic_download)
             .setOngoing(true)
             .build()

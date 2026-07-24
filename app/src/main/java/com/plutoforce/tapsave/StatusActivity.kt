@@ -28,8 +28,8 @@ import java.util.concurrent.Executors
 
 /**
  * Browses the WhatsApp statuses currently on the phone as a grid of thumbnails.
- * Tap a status to save it to the gallery, long-press to open it, or use
- * "Save all" to keep every one at once.
+ * Tap a status to save just that one to the gallery, or long-press to open it.
+ * The main way to save, though, is the floating button while viewing a status.
  */
 class StatusActivity : Activity() {
 
@@ -37,7 +37,6 @@ class StatusActivity : Activity() {
     private lateinit var emptyText: TextView
     private lateinit var permissionPanel: View
     private lateinit var grantButton: Button
-    private lateinit var saveAllButton: Button
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val thumbExecutor = Executors.newFixedThreadPool(3)
@@ -52,7 +51,6 @@ class StatusActivity : Activity() {
         emptyText = findViewById(R.id.statusEmpty)
         permissionPanel = findViewById(R.id.permissionPanel)
         grantButton = findViewById(R.id.grantAccessButton)
-        saveAllButton = findViewById(R.id.saveAllButton)
 
         adapter = StatusAdapter()
         grid.adapter = adapter
@@ -63,7 +61,6 @@ class StatusActivity : Activity() {
         }
 
         grantButton.setOnClickListener { requestAccess() }
-        saveAllButton.setOnClickListener { saveAll() }
     }
 
     override fun onResume() {
@@ -90,7 +87,6 @@ class StatusActivity : Activity() {
             permissionPanel.visibility = View.VISIBLE
             grid.visibility = View.GONE
             emptyText.visibility = View.GONE
-            saveAllButton.visibility = View.GONE
             return
         }
         permissionPanel.visibility = View.GONE
@@ -98,7 +94,6 @@ class StatusActivity : Activity() {
         adapter.notifyDataSetChanged()
         val empty = statuses.isEmpty()
         grid.visibility = if (empty) View.GONE else View.VISIBLE
-        saveAllButton.visibility = if (empty) View.GONE else View.VISIBLE
         emptyText.visibility = if (empty) View.VISIBLE else View.GONE
         emptyText.text = if (StatusSaver.statusFolderExists()) {
             getString(R.string.status_none)
@@ -134,17 +129,6 @@ class StatusActivity : Activity() {
             mainHandler.post {
                 toast(if (ok) getString(R.string.status_saved_one) else getString(R.string.status_save_failed))
             }
-        }
-    }
-
-    private fun saveAll() {
-        val toSave = statuses
-        if (toSave.isEmpty()) return
-        toast(getString(R.string.status_saving_all, toSave.size))
-        thumbExecutor.execute {
-            var saved = 0
-            for (s in toSave) if (StatusSaver.save(this, s)) saved++
-            mainHandler.post { toast(getString(R.string.status_saved_all, saved)) }
         }
     }
 

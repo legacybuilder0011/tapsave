@@ -6,7 +6,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.widget.Toast
 
 /**
  * Invisible helper opened when the floating button is tapped. On Android 10+ an
@@ -45,19 +44,21 @@ class ClipboardTapActivity : Activity() {
         }.getOrNull()
 
         val url = Prefs.firstUrl(copied)
-        if (url == null) {
-            Toast.makeText(
-                this,
-                "Copy a video link first, then tap the button",
-                Toast.LENGTH_SHORT
-            ).show()
-        } else {
-            val intent = Intent(this, OverlayService::class.java).apply {
+        val isFreshLink = url != null && url != Prefs.lastDownloadedUrl(this)
+
+        val intent = if (isFreshLink) {
+            // A newly copied link → download it (TikTok/Instagram/etc.).
+            Intent(this, OverlayService::class.java).apply {
                 action = OverlayService.ACTION_DOWNLOAD
                 putExtra(OverlayService.EXTRA_URL, url)
             }
-            startForegroundService(intent)
+        } else {
+            // No new link copied → save the WhatsApp status being viewed.
+            Intent(this, OverlayService::class.java).apply {
+                action = OverlayService.ACTION_SAVE_STATUS
+            }
         }
+        startForegroundService(intent)
         finish()
         overridePendingTransition(0, 0)
     }

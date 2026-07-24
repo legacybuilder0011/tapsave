@@ -10,6 +10,7 @@ object Prefs {
     private const val KEY_BACKEND = "backend"
     private const val KEY_QUALITY = "quality"
     private const val KEY_AUDIO = "audio_only"
+    private const val KEY_LAST_URL = "last_downloaded_url"
 
     private val URL_PATTERN: Pattern =
         Pattern.compile("https?://[^\\s\"'<>]+", Pattern.CASE_INSENSITIVE)
@@ -37,6 +38,15 @@ object Prefs {
 
     fun setAudioOnly(context: Context, value: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUDIO, value).apply()
+    }
+
+    /** The last link the floating button downloaded — so a stale copied link
+     * isn't re-downloaded when the button is used to save a WhatsApp status. */
+    fun lastDownloadedUrl(context: Context): String =
+        prefs(context).getString(KEY_LAST_URL, "").orEmpty()
+
+    fun setLastDownloadedUrl(context: Context, value: String) {
+        prefs(context).edit().putString(KEY_LAST_URL, value).apply()
     }
 
     /** Returns the first http(s) URL found in [text], or null. */

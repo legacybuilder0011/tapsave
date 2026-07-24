@@ -19,14 +19,6 @@
         android:text="@string/status_hint"
         android:textSize="13sp" />
 
-    <Button
-        android:id="@+id/saveAllButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="@string/status_save_all"
-        android:visibility="gone" />
-
     <GridView
         android:id="@+id/statusGrid"
         android:layout_width="match_parent"

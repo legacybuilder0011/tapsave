@@ -61,8 +61,15 @@ object StatusSaver {
         return out.sortedByDescending { it.file.lastModified() }
     }
 
+    /**
+     * The status the user is most likely looking at right now: the most recently
+     * written file in the status folder. WhatsApp saves a status to this folder
+     * as you open it, so the newest one is the one on screen.
+     */
+    fun newest(): Status? = list().firstOrNull()
+
     /** Copies one status into the gallery (Pictures/TapSave or Movies/TapSave). */
-    fun save(context: Context, status: Status): Boolean {
+    fun save(context: Context, status: Status, onProgress: (Int) -> Unit = {}): Boolean {
         val resolver = context.contentResolver
         val stamp = System.currentTimeMillis()
         val ext = status.file.extension.ifBlank { if (status.isVideo) "mp4" else "jpg" }
@@ -94,13 +101,32 @@ object StatusSaver {
 
         val uri = resolver.insert(collection, values) ?: return false
         return try {
+            val total = status.file.length()
             resolver.openOutputStream(uri).use { output ->
                 if (output == null) return false
-                status.file.inputStream().use { input -> input.copyTo(output, 64 * 1024) }
+                status.file.inputStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    var copied = 0L
+                    var lastPct = -1
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        output.write(buffer, 0, n)
+                        copied += n
+                        if (total > 0) {
+                            val pct = ((copied * 100) / total).toInt()
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                onProgress(pct)
+                            }
+                        }
+                    }
+                }
             }
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
+            onProgress(100)
             true
         } catch (e: Exception) {
             runCatching { resolver.delete(uri, null, null) }
