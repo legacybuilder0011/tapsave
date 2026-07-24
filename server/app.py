@@ -174,15 +174,44 @@ def index():
 
 # Video format per requested quality. Prefer mp4 and merge so the device gets
 # one ready-to-play file; fall back to any best stream.
-# Prefer H.264 (avc). TikTok's H.265/"bytevc1" streams play with NO audio in most
-# phone galleries and players, so we pick H.264 first and only fall back to
-# merging or other codecs when no H.264 stream exists.
-_AVC = "vcodec~='^(avc|h264)'"
+# Highest resolution per quality (any codec). H.265 results are transcoded to
+# H.264 afterwards (see maybe_transcode) so they keep audio and play everywhere.
 QUALITY_FORMATS = {
-    "high": f"b[{_AVC}]/bv*[{_AVC}]+ba/bv*+ba/b",
-    "medium": f"b[{_AVC}][height<=720]/b[height<=720]/bv*[height<=720]+ba/b",
-    "low": f"b[{_AVC}][height<=480]/b[height<=480]/bv*[height<=480]+ba/b",
+    "high": "bv*+ba/b",
+    "medium": "bv*[height<=720]+ba/b[height<=720]/b",
+    "low": "bv*[height<=480]+ba/b[height<=480]/b",
 }
+
+
+def _video_is_hevc(path: str) -> bool:
+    if not FFMPEG_LOCATION:
+        return False
+    try:
+        info = subprocess.run(
+            [FFMPEG_LOCATION, "-i", path], capture_output=True, timeout=60
+        ).stderr.decode(errors="ignore").lower()
+    except Exception:
+        return False
+    return "video:" in info and ("hevc" in info or "h265" in info)
+
+
+def maybe_transcode(path: str, workdir: str) -> str:
+    """H.265 videos play silently in most players; re-encode them to H.264+AAC."""
+    if not _video_is_hevc(path):
+        return path
+    out = os.path.join(workdir, "h264.mp4")
+    try:
+        subprocess.run(
+            [
+                FFMPEG_LOCATION, "-y", "-i", path,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out,
+            ],
+            check=True, capture_output=True, timeout=280,
+        )
+        return out
+    except Exception:
+        return path
 
 # YouTube blocks the default web client from server IPs ("Sign in to confirm
 # you're not a bot"). Which clients work depends on whether we have cookies:
@@ -363,6 +392,8 @@ def download(
         raise HTTPException(status_code=502, detail="No file was produced")
 
     path = max(files, key=os.path.getsize)
+    if not audio:
+        path = maybe_transcode(path, workdir)
     return FileResponse(
         path,
         media_type="audio/mpeg" if audio else "video/mp4",
