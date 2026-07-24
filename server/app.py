@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
@@ -195,6 +196,13 @@ YT_ARGS_WITH_COOKIES = "youtube:player_client=default,mweb"
 # yt-dlp, which lets YouTube downloads through from the server IP.
 COOKIES_FILE = os.environ.get("YTDLP_COOKIES", "/etc/secrets/cookies.txt")
 
+_YOUTUBE_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
+
+
+def is_youtube(url: str) -> bool:
+    host = urlparse(url).netloc.lower()
+    return any(h in host for h in _YOUTUBE_HOSTS)
+
 
 @app.get("/health")
 def health():
@@ -281,6 +289,14 @@ def download(
 ):
     if not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(status_code=400, detail="URL must start with http(s)://")
+
+    # Reject YouTube immediately — it can't be downloaded from a cloud server and
+    # attempting it can wedge the free instance for other downloads.
+    if is_youtube(url):
+        raise HTTPException(
+            status_code=400,
+            detail="YouTube isn't supported here. TikTok, Instagram and Pinterest work.",
+        )
 
     workdir = tempfile.mkdtemp(prefix="tapsave_")
     output_template = os.path.join(workdir, f"{uuid.uuid4().hex}.%(ext)s")
