@@ -18,8 +18,12 @@ object Prefs {
     private fun prefs(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
+    /** Built-in default server so users never have to enter an address. */
+    const val DEFAULT_BACKEND = "https://tapsave-backend.onrender.com"
+
     fun backend(context: Context): String =
-        prefs(context).getString(KEY_BACKEND, "").orEmpty()
+        prefs(context).getString(KEY_BACKEND, DEFAULT_BACKEND).orEmpty()
+            .ifBlank { DEFAULT_BACKEND }
 
     fun setBackend(context: Context, value: String) {
         prefs(context).edit().putString(KEY_BACKEND, value.trim()).apply()

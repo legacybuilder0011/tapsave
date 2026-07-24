@@ -1,0 +1,20 @@
+<resources>
+    <color name="brand">#6C4DFF</color>
+    <color name="brand_dark">#5A3FE0</color>
+    <color name="brand_glow">#8B6BFF</color>
+
+    <!-- Dark theme surfaces -->
+    <color name="bg">#0B0B12</color>
+    <color name="bg_elevated">#14141F</color>
+    <color name="card">#171622</color>
+    <color name="card_stroke">#262536</color>
+    <color name="chip">#1E1D2B</color>
+
+    <color name="ink">#F4F4F8</color>
+    <color name="muted">#9A9AA8</color>
+    <color name="faint">#6E6E7E</color>
+
+    <color name="success">#34D399</color>
+    <color name="danger">#F87171</color>
+    <color name="whatsapp">#25D366</color>
+</resources>

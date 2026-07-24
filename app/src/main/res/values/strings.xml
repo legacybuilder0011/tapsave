@@ -1,6 +1,26 @@
 <resources>
     <string name="app_name">TapSave</string>
-    <string name="tagline">Copy a video link, tap the floating button, save it to your phone.</string>
+    <string name="tagline">Save videos and WhatsApp statuses with one tap.</string>
+
+    <string name="tile_download_title">Download video</string>
+    <string name="tile_download_sub">Copy a link, tap the button</string>
+    <string name="tile_status_title">WhatsApp status</string>
+    <string name="tile_status_sub">Save the one you\'re viewing</string>
+    <string name="audio_only_sub">Save just the sound as MP3</string>
+    <string name="row_history_sub">Everything you\'ve saved</string>
+    <string name="row_update_sub">Get the newest version</string>
+    <string name="row_howto_title">How it works</string>
+    <string name="row_howto_sub">A quick guide</string>
+
+    <string name="nav_home">Home</string>
+    <string name="nav_status">Status</string>
+    <string name="nav_downloads">Downloads</string>
+    <string name="nav_update">Update</string>
+
+    <string name="stop_button_active">Stop floating button</string>
+    <string name="status_running">● Floating button running</string>
+    <string name="status_ready">Ready — tap Start below</string>
+    <string name="status_need_overlay">Tap Start and allow \"display over other apps\"</string>
     <string name="server_label">Server address</string>
     <string name="server_hint">https://your-server:8080</string>
     <string name="save_server">Save server address</string>

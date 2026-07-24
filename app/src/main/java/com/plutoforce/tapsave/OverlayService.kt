@@ -37,6 +37,11 @@ class OverlayService : Service() {
 
         private const val CHANNEL_ID = "tapsave_overlay"
         private const val NOTIFICATION_ID = 42
+
+        /** Whether the floating button is currently showing (for the UI toggle). */
+        @Volatile
+        var isRunning = false
+            private set
     }
 
     private lateinit var windowManager: WindowManager
@@ -58,6 +63,7 @@ class OverlayService : Service() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         startForeground(NOTIFICATION_ID, buildNotification())
         showBubble()
+        isRunning = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -73,6 +79,7 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
+        isRunning = false
         bubble?.let { runCatching { windowManager.removeView(it) } }
         bubble = null
         super.onDestroy()

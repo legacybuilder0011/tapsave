@@ -2,27 +2,33 @@ package com.plutoforce.tapsave
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.app.AlertDialog
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.EditText
-import android.widget.RadioButton
-import android.widget.RadioGroup
+import android.view.View
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
+/**
+ * Home screen: start/stop the floating button, pick download quality, and jump
+ * to the WhatsApp Status Saver, download history, updates and help. The server
+ * address is built in, so there's nothing to configure.
+ */
 class MainActivity : Activity() {
 
-    private lateinit var backendField: EditText
     private lateinit var statusText: TextView
+    private lateinit var toggleButton: TextView
+    private lateinit var chipHigh: TextView
+    private lateinit var chip720: TextView
+    private lateinit var chip480: TextView
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var checkedThisLaunch = false
 
@@ -30,57 +36,37 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        backendField = findViewById(R.id.backendField)
         statusText = findViewById(R.id.statusText)
-        backendField.setText(Prefs.backend(this))
+        toggleButton = findViewById(R.id.toggleButton)
+        chipHigh = findViewById(R.id.chipHigh)
+        chip720 = findViewById(R.id.chip720)
+        chip480 = findViewById(R.id.chip480)
 
-        findViewById<Button>(R.id.saveButton).setOnClickListener {
-            Prefs.setBackend(this, backendField.text.toString())
-            toast("Server address saved")
-            updateStatus()
-        }
-        findViewById<Button>(R.id.overlayButton).setOnClickListener { requestOverlayPermission() }
-        findViewById<Button>(R.id.startButton).setOnClickListener { startBubble() }
-        findViewById<Button>(R.id.stopButton).setOnClickListener {
-            stopService(Intent(this, OverlayService::class.java))
-            toast("Floating button stopped")
-        }
-        findViewById<Button>(R.id.updateButton).setOnClickListener {
-            checkForUpdate(userInitiated = true)
-        }
+        toggleButton.setOnClickListener { toggleBubble() }
 
-        // Quality + audio preferences (used for every download).
-        val qualityGroup = findViewById<RadioGroup>(R.id.qualityGroup)
-        val audioOnly = findViewById<CheckBox>(R.id.audioOnly)
-        val checkedId = when (Prefs.quality(this)) {
-            "medium" -> R.id.qMedium
-            "low" -> R.id.qLow
-            else -> R.id.qHigh
-        }
-        findViewById<RadioButton>(checkedId).isChecked = true
-        audioOnly.isChecked = Prefs.audioOnly(this)
+        chipHigh.setOnClickListener { setQuality("high") }
+        chip720.setOnClickListener { setQuality("medium") }
+        chip480.setOnClickListener { setQuality("low") }
+        renderQuality(Prefs.quality(this))
 
-        qualityGroup.setOnCheckedChangeListener { _, id ->
-            Prefs.setQuality(
-                this,
-                when (id) {
-                    R.id.qMedium -> "medium"
-                    R.id.qLow -> "low"
-                    else -> "high"
-                }
-            )
-        }
-        audioOnly.setOnCheckedChangeListener { _, isChecked ->
-            Prefs.setAudioOnly(this, isChecked)
-        }
+        val audioSwitch = findViewById<Switch>(R.id.audioSwitch)
+        audioSwitch.isChecked = Prefs.audioOnly(this)
+        audioSwitch.setOnCheckedChangeListener { _, checked -> Prefs.setAudioOnly(this, checked) }
 
-        findViewById<Button>(R.id.statusButton).setOnClickListener {
-            startActivity(Intent(this, StatusActivity::class.java))
-        }
+        findViewById<View>(R.id.tileDownload).setOnClickListener { showHowTo() }
+        findViewById<View>(R.id.tileStatus).setOnClickListener { openStatus() }
 
-        findViewById<Button>(R.id.historyButton).setOnClickListener {
-            startActivity(Intent(this, DownloadHistoryActivity::class.java))
-        }
+        findViewById<View>(R.id.rowHistory).setOnClickListener { openDownloads() }
+        findViewById<View>(R.id.rowUpdate).setOnClickListener { checkForUpdate(true) }
+        findViewById<View>(R.id.rowHowto).setOnClickListener { showHowTo() }
+
+        findViewById<View>(R.id.navHome).setOnClickListener { /* already home */ }
+        findViewById<View>(R.id.navStatus).setOnClickListener { openStatus() }
+        findViewById<View>(R.id.navDownloads).setOnClickListener { openDownloads() }
+        findViewById<View>(R.id.navUpdate).setOnClickListener { checkForUpdate(true) }
+
+        findViewById<TextView>(R.id.updateSub).text =
+            getString(R.string.row_update_sub) + "  •  v" + currentVersionName()
 
         maybeRequestNotifications()
         handleSharedLink(intent)
@@ -93,11 +79,86 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        updateStatus()
+        renderRunningState()
         if (!checkedThisLaunch) {
             checkedThisLaunch = true
             checkForUpdate(userInitiated = false)
         }
+    }
+
+    // --- Floating button ---
+
+    private fun toggleBubble() {
+        if (OverlayService.isRunning) {
+            stopService(Intent(this, OverlayService::class.java))
+            mainHandler.postDelayed({ renderRunningState() }, 300L)
+            toast("Floating button stopped")
+            return
+        }
+        if (!Settings.canDrawOverlays(this)) {
+            AlertDialog.Builder(this)
+                .setTitle("One quick permission")
+                .setMessage("TapSave needs to show a floating button over other apps. Turn on \"display over other apps\" on the next screen, then tap Start again.")
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton("Open settings") { _, _ ->
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        )
+                    )
+                }
+                .show()
+            return
+        }
+        startForegroundService(
+            Intent(this, OverlayService::class.java).apply { action = OverlayService.ACTION_SHOW }
+        )
+        mainHandler.postDelayed({ renderRunningState() }, 300L)
+        toast("Floating button started")
+    }
+
+    private fun renderRunningState() {
+        val running = OverlayService.isRunning
+        toggleButton.text =
+            getString(if (running) R.string.stop_button_active else R.string.start_button)
+        statusText.text = when {
+            running -> getString(R.string.status_running)
+            Settings.canDrawOverlays(this) -> getString(R.string.status_ready)
+            else -> getString(R.string.status_need_overlay)
+        }
+        statusText.setTextColor(getColor(if (running) R.color.success else R.color.muted))
+    }
+
+    // --- Quality chips ---
+
+    private fun setQuality(value: String) {
+        Prefs.setQuality(this, value)
+        renderQuality(value)
+    }
+
+    private fun renderQuality(value: String) {
+        style(chipHigh, value == "high")
+        style(chip720, value == "medium")
+        style(chip480, value == "low")
+    }
+
+    private fun style(chip: TextView, selected: Boolean) {
+        chip.setBackgroundResource(if (selected) R.drawable.chip_bg_selected else R.drawable.chip_bg)
+        chip.setTextColor(getColor(if (selected) android.R.color.white else R.color.ink))
+    }
+
+    // --- Navigation ---
+
+    private fun openStatus() = startActivity(Intent(this, StatusActivity::class.java))
+    private fun openDownloads() = startActivity(Intent(this, DownloadHistoryActivity::class.java))
+
+    private fun showHowTo() {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.row_howto_title))
+            .setMessage(getString(R.string.how_to))
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     // --- Update flow ---
@@ -160,43 +221,16 @@ class MainActivity : Activity() {
         if (intent?.action != Intent.ACTION_SEND) return
         val shared = intent.getStringExtra(Intent.EXTRA_TEXT)
         val url = Prefs.firstUrl(shared)
-        when {
-            url == null -> toast("No link found in the shared text")
-            Prefs.backend(this).isBlank() -> toast("Set the server address first")
-            else -> {
-                val serviceIntent = Intent(this, OverlayService::class.java).apply {
-                    action = OverlayService.ACTION_DOWNLOAD
-                    putExtra(OverlayService.EXTRA_URL, url)
-                }
-                startForegroundService(serviceIntent)
-                toast("Downloading shared link…")
-            }
-        }
-    }
-
-    private fun startBubble() {
-        if (!Settings.canDrawOverlays(this)) {
-            toast("Grant the 'display over other apps' permission first")
-            requestOverlayPermission()
+        if (url == null) {
+            toast("No link found in the shared text")
             return
         }
-        val intent = Intent(this, OverlayService::class.java).apply {
-            action = OverlayService.ACTION_SHOW
+        val serviceIntent = Intent(this, OverlayService::class.java).apply {
+            action = OverlayService.ACTION_DOWNLOAD
+            putExtra(OverlayService.EXTRA_URL, url)
         }
-        startForegroundService(intent)
-        toast("Floating button started")
-    }
-
-    private fun requestOverlayPermission() {
-        if (Settings.canDrawOverlays(this)) {
-            toast("Overlay permission already granted")
-            return
-        }
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName")
-        )
-        startActivity(intent)
+        startForegroundService(serviceIntent)
+        toast("Downloading shared link…")
     }
 
     private fun maybeRequestNotifications() {
@@ -208,14 +242,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun updateStatus() {
-        val hasBackend = Prefs.backend(this).isNotBlank()
-        val hasOverlay = Settings.canDrawOverlays(this)
-        statusText.text = buildString {
-            append(if (hasBackend) "✓ Server address set\n" else "✗ Server address not set\n")
-            append(if (hasOverlay) "✓ Overlay permission granted" else "✗ Overlay permission needed")
-        }
-    }
+    private fun currentVersionName(): String =
+        runCatching { packageManager.getPackageInfo(packageName, 0).versionName }
+            .getOrNull() ?: "1.0"
 
     private fun toast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

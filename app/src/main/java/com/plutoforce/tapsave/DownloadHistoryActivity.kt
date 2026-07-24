@@ -31,7 +31,9 @@ class DownloadHistoryActivity : Activity() {
         adapter = DownloadAdapter()
         listView.adapter = adapter
 
-        findViewById<Button>(R.id.clearAllButton).setOnClickListener {
+        findViewById<View>(R.id.backButton).setOnClickListener { finish() }
+
+        findViewById<View>(R.id.clearAllButton).setOnClickListener {
             if (items.isEmpty()) return@setOnClickListener
             AlertDialog.Builder(this)
                 .setTitle(getString(R.string.clear_all))

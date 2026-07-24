@@ -18,7 +18,6 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
-import android.widget.Button
 import android.widget.GridView
 import android.widget.ImageView
 import android.widget.TextView
@@ -36,7 +35,7 @@ class StatusActivity : Activity() {
     private lateinit var grid: GridView
     private lateinit var emptyText: TextView
     private lateinit var permissionPanel: View
-    private lateinit var grantButton: Button
+    private lateinit var grantButton: TextView
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val thumbExecutor = Executors.newFixedThreadPool(3)
@@ -51,6 +50,8 @@ class StatusActivity : Activity() {
         emptyText = findViewById(R.id.statusEmpty)
         permissionPanel = findViewById(R.id.permissionPanel)
         grantButton = findViewById(R.id.grantAccessButton)
+
+        findViewById<View>(R.id.backButton).setOnClickListener { finish() }
 
         adapter = StatusAdapter()
         grid.adapter = adapter
