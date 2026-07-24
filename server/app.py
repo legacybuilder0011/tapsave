@@ -18,7 +18,7 @@ import tempfile
 import uuid
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 # A bundled ffmpeg so yt-dlp can always merge video+audio and make mp3s, even if
 # the host has no system ffmpeg. Without merging, videos come out silent.
@@ -223,6 +223,49 @@ def diag():
         "cookies_path": COOKIES_FILE,
         "cookies_bytes": os.path.getsize(COOKIES_FILE) if present else 0,
     }
+
+
+@app.get("/probe", response_class=PlainTextResponse)
+def probe(url: str = Query(...)):
+    """Diagnostic: show available formats and which one is selected + why."""
+    if not url.startswith("http"):
+        raise HTTPException(status_code=400, detail="bad url")
+    has_cookies = os.path.exists(COOKIES_FILE)
+    common = [
+        "--no-warnings", "--force-ipv4",
+        "--extractor-args", YT_ARGS_WITH_COOKIES if has_cookies else YT_ARGS_NO_COOKIES,
+    ]
+    cookie_args = []
+    if has_cookies:
+        tmp = tempfile.mkdtemp()
+        dst = os.path.join(tmp, "c.txt")
+        try:
+            shutil.copyfile(COOKIES_FILE, dst)
+            cookie_args = ["--cookies", dst]
+        except OSError:
+            pass
+
+    def run(extra):
+        try:
+            p = subprocess.run(
+                ["yt-dlp"] + common + cookie_args + extra + [url],
+                capture_output=True, timeout=120,
+            )
+            return (p.stdout.decode(errors="ignore") + "\n" + p.stderr.decode(errors="ignore"))
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+    formats = run(["-F"])
+    chosen = run(["--simulate", "-f", QUALITY_FORMATS["high"], "-v"])
+    # Keep the response readable.
+    return (
+        "=== AVAILABLE FORMATS ===\n" + formats[-4000:]
+        + "\n\n=== SELECTION (bv*+ba/b) ===\n"
+        + "\n".join(
+            ln for ln in chosen.splitlines()
+            if ("Downloading" in ln or "format" in ln.lower() or "Merg" in ln or "ERROR" in ln)
+        )[-3000:]
+    )
 
 
 @app.get("/download")
