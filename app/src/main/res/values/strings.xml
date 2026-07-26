@@ -5,7 +5,7 @@
     <string name="tile_download_title">Download video</string>
     <string name="tile_download_sub">Copy a link, tap the button</string>
     <string name="tile_status_title">WhatsApp status</string>
-    <string name="tile_status_sub">Save the one you\'re viewing</string>
+    <string name="tile_status_sub">Pick one, save to gallery</string>
     <string name="audio_only_sub">Save just the sound as MP3</string>
     <string name="row_history_sub">Everything you\'ve saved</string>
     <string name="row_update_sub">Get the newest version</string>
@@ -37,20 +37,21 @@
     <string name="history_title">Downloads</string>
     <string name="clear_all">Clear list</string>
     <string name="history_empty">Nothing downloaded yet. Your saved videos and audio show up here.</string>
-    <string name="how_to">How to use:\n1. Run the TapSave backend and put its address above.\n2. Pick quality (or Audio only) — used for every download.\n3. Grant the overlay permission and start the floating button.\n4. Videos: in TikTok/Instagram/Pinterest, copy the video link (or Share to TapSave), then tap the floating button.\n5. WhatsApp statuses: open WhatsApp Status Saver once to allow file access, then while watching a status you like, tap the floating button — it saves just that one.\n\nThe button shows progress %, then a ✓, and saves to your Gallery (Movies/Pictures/TapSave) or Music/TapSave.\n\nFor content you own or have permission to download.</string>
+    <string name="how_to">How to use:\n1. Run the TapSave backend and put its address above.\n2. Pick quality (or Audio only) — used for every download.\n3. Grant the overlay permission and start the floating button.\n4. Videos: in TikTok/Instagram/Pinterest, copy the video link (or Share to TapSave), then tap the floating button.\n5. WhatsApp statuses: open WhatsApp Status Saver once to allow file access. Then tap the floating button any time to pick a status from the grid — it saves just that one. (WhatsApp doesn\u2019t tell apps which status is on screen, so you choose it.)\n\nThe button shows progress %, then a ✓, and saves to your Gallery (Movies/Pictures/TapSave) or Music/TapSave.\n\nFor content you own or have permission to download.</string>
 
     <!-- WhatsApp Status Saver -->
     <string name="open_status">WhatsApp Status Saver</string>
     <string name="status_title">WhatsApp statuses</string>
-    <string name="status_hint">Easiest way: while watching a status you like, just tap the floating TapSave button — it saves only that one, with a progress % and a ✓ when done. You can also tap any status below to save just that one. Nothing is saved automatically.</string>
+    <string name="status_hint">Tap any status below to save just that one. You can also tap the floating TapSave button while browsing statuses to get this picker anywhere. Nothing is saved automatically.</string>
     <string name="status_none">No statuses right now. Open a contact\'s status in WhatsApp, then come back — recently viewed photos and videos will appear here.</string>
     <string name="status_no_folder">No WhatsApp status folder found yet. Make sure WhatsApp is installed and you\'ve opened at least one status, then reopen this screen.</string>
     <string name="status_grant_access">Grant access</string>
     <string name="status_access_title">Allow access to statuses</string>
     <string name="status_access_message">To find WhatsApp statuses, TapSave needs permission to read files on your phone. On the next screen, turn on "Allow access to manage all files".</string>
     <string name="status_open_settings">Open settings</string>
-    <string name="picker_title">Which one?</string>
-    <string name="picker_sub">Tap the status you just watched — it saves instantly.</string>
+    <string name="picker_title">Pick a status to save</string>
+    <string name="picker_sub">WhatsApp doesn\u2019t tell apps which status is on screen, so tap the one you want \u2014 it saves instantly.</string>
+    <string name="picker_saved_badge">\u2713 Saved</string>
     <string name="status_saved_one">Saved to Gallery (TapSave)</string>
     <string name="status_save_failed">Couldn\'t save that one</string>
     <string name="status_open_failed">Couldn\'t open that status</string>

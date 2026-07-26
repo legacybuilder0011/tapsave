@@ -44,9 +44,15 @@ object StatusSaver {
     /** True if WhatsApp appears installed but no statuses have been viewed yet. */
     fun statusFolderExists(): Boolean = candidateDirs().any { it.isDirectory }
 
-    /** All current statuses, newest first. Empty if none or no access. */
+    /**
+     * All current statuses, newest first, with duplicates removed. WhatsApp and
+     * WhatsApp Business can hold the same status, and the same photo often lands
+     * twice, so we key on name and on size+timestamp.
+     */
     fun list(): List<Status> {
         val out = ArrayList<Status>()
+        val seenNames = HashSet<String>()
+        val seenContent = HashSet<String>()
         for (dir in candidateDirs()) {
             val files = dir.listFiles() ?: continue
             for (f in files) {
@@ -55,34 +61,55 @@ object StatusSaver {
                 val isVideo = name.endsWith(".mp4")
                 val isImage = name.endsWith(".jpg") || name.endsWith(".jpeg") ||
                     name.endsWith(".png") || name.endsWith(".webp")
-                if (isVideo || isImage) out.add(Status(f, isVideo))
+                if (!isVideo && !isImage) continue
+                val contentKey = "${f.length()}_${f.lastModified()}"
+                if (!seenNames.add(name) || !seenContent.add(contentKey)) continue
+                out.add(Status(f, isVideo))
             }
         }
         return out.sortedByDescending { it.file.lastModified() }
     }
 
-    /**
-     * The status the user is most likely looking at right now: the most recently
-     * written file in the status folder. WhatsApp saves a status to this folder
-     * as you open it, so the newest one is usually the one on screen.
-     */
+    /** The most recently written status. */
     fun newest(): Status? = list().firstOrNull()
 
     /**
-     * The status being viewed, but only when we can be confident. WhatsApp also
-     * pre-downloads statuses in the background, so "newest file" can be one the
-     * user never opened. We only claim certainty when exactly one status was
-     * written in the last [withinMs] — that's the one WhatsApp wrote as the user
-     * opened it. Otherwise this returns null and the caller should ask.
+     * The status being viewed, if we can genuinely tell.
+     *
+     * WhatsApp gives apps no way to ask what's on screen, and it pre-downloads
+     * statuses in batches before you open them — so file timestamps do NOT
+     * identify the one you're looking at. We only skip the picker in the one
+     * unambiguous case: a single status exists that was written moments ago.
+     * Any other time the caller must ask the user.
      */
-    fun confidentlyViewed(withinMs: Long = 25_000L): Status? {
+    fun confidentlyViewed(withinMs: Long = 8_000L): Status? {
         val now = System.currentTimeMillis()
-        val recent = list().filter { now - it.file.lastModified() <= withinMs }
-        return recent.singleOrNull()
+        val all = list()
+        val recent = all.filter { now - it.file.lastModified() <= withinMs }
+        return if (recent.size == 1 && all.size == 1) recent.first() else null
     }
 
-    /** The [limit] newest statuses, for letting the user pick the right one. */
-    fun recent(limit: Int): List<Status> = list().take(limit)
+    // --- Remembering what's already been saved ----------------------------
+
+    private const val SAVED_PREFS = "tapsave_saved_statuses"
+    private const val SAVED_KEY = "keys"
+
+    private fun key(status: Status) = "${status.file.name}_${status.file.length()}"
+
+    fun isAlreadySaved(context: Context, status: Status): Boolean =
+        context.getSharedPreferences(SAVED_PREFS, Context.MODE_PRIVATE)
+            .getStringSet(SAVED_KEY, emptySet())
+            .orEmpty()
+            .contains(key(status))
+
+    private fun markSaved(context: Context, status: Status) {
+        val prefs = context.getSharedPreferences(SAVED_PREFS, Context.MODE_PRIVATE)
+        val current = prefs.getStringSet(SAVED_KEY, emptySet()).orEmpty().toMutableSet()
+        current.add(key(status))
+        // Statuses expire in a day, so this set never needs to grow forever.
+        while (current.size > 400) current.remove(current.first())
+        prefs.edit().putStringSet(SAVED_KEY, current).apply()
+    }
 
     /** Copies one status into the gallery (Pictures/TapSave or Movies/TapSave). */
     fun save(context: Context, status: Status, onProgress: (Int) -> Unit = {}): Boolean {
@@ -143,6 +170,7 @@ object StatusSaver {
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
             onProgress(100)
+            markSaved(context, status)
             true
         } catch (e: Exception) {
             runCatching { resolver.delete(uri, null, null) }

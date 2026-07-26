@@ -33,7 +33,7 @@ class StatusPickerActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_status_picker)
 
-        statuses = StatusSaver.recent(6)
+        statuses = StatusSaver.list()
         if (statuses.isEmpty()) {
             Toast.makeText(this, "No status found", Toast.LENGTH_SHORT).show()
             finish()
@@ -46,6 +46,7 @@ class StatusPickerActivity : Activity() {
 
         // Tapping the dimmed area outside the sheet dismisses.
         findViewById<View>(R.id.dimArea).setOnClickListener { dismiss() }
+        findViewById<View>(R.id.pickerClose).setOnClickListener { dismiss() }
     }
 
     override fun onDestroy() {
@@ -76,11 +77,17 @@ class StatusPickerActivity : Activity() {
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val view = convertView
                 ?: LayoutInflater.from(this@StatusPickerActivity)
-                    .inflate(R.layout.item_status, parent, false)
+                    .inflate(R.layout.item_status_picker, parent, false)
             val status = statuses[position]
             val thumb = view.findViewById<ImageView>(R.id.statusThumb)
             view.findViewById<View>(R.id.playBadge).visibility =
                 if (status.isVideo) View.VISIBLE else View.GONE
+            view.findViewById<View>(R.id.savedBadge).visibility =
+                if (StatusSaver.isAlreadySaved(this@StatusPickerActivity, status)) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
 
             thumb.setImageDrawable(null)
             val token = status.file.absolutePath
