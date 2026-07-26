@@ -64,9 +64,25 @@ object StatusSaver {
     /**
      * The status the user is most likely looking at right now: the most recently
      * written file in the status folder. WhatsApp saves a status to this folder
-     * as you open it, so the newest one is the one on screen.
+     * as you open it, so the newest one is usually the one on screen.
      */
     fun newest(): Status? = list().firstOrNull()
+
+    /**
+     * The status being viewed, but only when we can be confident. WhatsApp also
+     * pre-downloads statuses in the background, so "newest file" can be one the
+     * user never opened. We only claim certainty when exactly one status was
+     * written in the last [withinMs] — that's the one WhatsApp wrote as the user
+     * opened it. Otherwise this returns null and the caller should ask.
+     */
+    fun confidentlyViewed(withinMs: Long = 25_000L): Status? {
+        val now = System.currentTimeMillis()
+        val recent = list().filter { now - it.file.lastModified() <= withinMs }
+        return recent.singleOrNull()
+    }
+
+    /** The [limit] newest statuses, for letting the user pick the right one. */
+    fun recent(limit: Int): List<Status> = list().take(limit)
 
     /** Copies one status into the gallery (Pictures/TapSave or Movies/TapSave). */
     fun save(context: Context, status: Status, onProgress: (Int) -> Unit = {}): Boolean {

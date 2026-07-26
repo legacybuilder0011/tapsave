@@ -23,6 +23,26 @@ object VideoDownloader {
         val audio: Boolean = false
     )
 
+    /**
+     * Pokes the backend so it's already awake when a download starts. Free hosts
+     * sleep when idle and can take a while to boot on the first request.
+     */
+    fun warmUp(backendBase: String) {
+        val base = backendBase.trim().trimEnd('/')
+        if (base.isEmpty()) return
+        Thread {
+            runCatching {
+                val connection = (URL("$base/health").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 10_000
+                    readTimeout = 60_000
+                }
+                connection.responseCode
+                connection.disconnect()
+            }
+        }.start()
+    }
+
     fun download(
         context: Context,
         backendBase: String,

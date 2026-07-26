@@ -55,6 +55,15 @@
             android:name=".StatusActivity"
             android:exported="false" />
 
+        <!-- Quick "which status?" sheet shown over WhatsApp; its own task so
+             dismissing returns the user to WhatsApp, not to TapSave. -->
+        <activity
+            android:name=".StatusPickerActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@style/Theme.TapSave.Transparent" />
+
         <service
             android:name=".OverlayService"
             android:exported="false"

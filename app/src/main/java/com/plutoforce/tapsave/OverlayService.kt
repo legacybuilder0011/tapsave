@@ -32,8 +32,10 @@ class OverlayService : Service() {
     companion object {
         const val ACTION_DOWNLOAD = "com.plutoforce.tapsave.DOWNLOAD"
         const val ACTION_SAVE_STATUS = "com.plutoforce.tapsave.SAVE_STATUS"
+        const val ACTION_SAVE_STATUS_FILE = "com.plutoforce.tapsave.SAVE_STATUS_FILE"
         const val ACTION_SHOW = "com.plutoforce.tapsave.SHOW"
         const val EXTRA_URL = "url"
+        const val EXTRA_PATH = "path"
 
         private const val CHANNEL_ID = "tapsave_overlay"
         private const val NOTIFICATION_ID = 42
@@ -64,6 +66,8 @@ class OverlayService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         showBubble()
         isRunning = true
+        // Wake the backend now so the first link download isn't stuck on a cold start.
+        VideoDownloader.warmUp(Prefs.backend(this))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -74,6 +78,15 @@ class OverlayService : Service() {
                 if (!url.isNullOrBlank()) startDownload(url)
             }
             ACTION_SAVE_STATUS -> startStatusSave()
+            ACTION_SAVE_STATUS_FILE -> {
+                val path = intent.getStringExtra(EXTRA_PATH)
+                if (!path.isNullOrBlank()) {
+                    val file = java.io.File(path)
+                    if (file.isFile) {
+                        saveStatus(StatusSaver.Status(file, file.name.lowercase().endsWith(".mp4")))
+                    }
+                }
+            }
         }
         return START_STICKY
     }
@@ -157,7 +170,12 @@ class OverlayService : Service() {
         }.start()
     }
 
-    /** Saves the WhatsApp status currently being viewed (the newest one). */
+    /**
+     * Saves the WhatsApp status being viewed. This is a local file copy, so it
+     * finishes almost instantly — no server involved. If we can't be sure which
+     * status is on screen (WhatsApp pre-downloads some in the background), a
+     * quick picker of the newest few is shown instead of guessing wrong.
+     */
     private fun startStatusSave() {
         if (isDownloading) {
             toast("Busy — try again in a second")
@@ -167,15 +185,30 @@ class OverlayService : Service() {
             toast("Open TapSave → WhatsApp Status Saver and allow file access first")
             return
         }
-        val status = StatusSaver.newest()
-        if (status == null) {
+        if (StatusSaver.newest() == null) {
             toast("No status found — open a status in WhatsApp, then tap")
             return
         }
 
+        val certain = StatusSaver.confidentlyViewed()
+        if (certain != null) {
+            saveStatus(certain)
+        } else {
+            // Ambiguous — let the user tap the one they just watched.
+            startActivity(
+                Intent(this, StatusPickerActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                    .addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            )
+        }
+    }
+
+    /** Copies one status into the gallery, showing progress then a check mark. */
+    private fun saveStatus(status: StatusSaver.Status) {
+        if (isDownloading) return
         isDownloading = true
         setPreparing()
-        toast(if (status.isVideo) "Saving status video…" else "Saving status photo…")
 
         Thread {
             val ok = StatusSaver.save(applicationContext, status) { pct ->
@@ -184,7 +217,13 @@ class OverlayService : Service() {
             handler.post {
                 isDownloading = false
                 if (ok) showSuccessThenIdle() else setIdle()
-                toast(if (ok) "Saved to Gallery (TapSave)" else "Couldn't save that status")
+                toast(
+                    when {
+                        !ok -> "Couldn't save that status"
+                        status.isVideo -> "Video saved to Gallery"
+                        else -> "Photo saved to Gallery"
+                    }
+                )
             }
         }.start()
     }

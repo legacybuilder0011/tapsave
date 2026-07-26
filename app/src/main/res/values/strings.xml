@@ -49,6 +49,8 @@
     <string name="status_access_title">Allow access to statuses</string>
     <string name="status_access_message">To find WhatsApp statuses, TapSave needs permission to read files on your phone. On the next screen, turn on "Allow access to manage all files".</string>
     <string name="status_open_settings">Open settings</string>
+    <string name="picker_title">Which one?</string>
+    <string name="picker_sub">Tap the status you just watched — it saves instantly.</string>
     <string name="status_saved_one">Saved to Gallery (TapSave)</string>
     <string name="status_save_failed">Couldn\'t save that one</string>
     <string name="status_open_failed">Couldn\'t open that status</string>
