@@ -3,7 +3,6 @@ package com.plutoforce.tapsave
 import android.app.Activity
 import android.content.ClipboardManager
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,16 +13,10 @@ import android.os.Looper
  * [onWindowFocusChanged] before reading — reading in onCreate returns null
  * because the window has not gained focus yet.
  *
- * A link only counts as a download request if it was copied in the last
- * [FRESH_WINDOW_MS]. Otherwise an old link left in the clipboard would hijack
- * the button while the user is browsing WhatsApp statuses, sending them to the
- * (slow, network) download path instead of the instant local status save.
+ * A copied video link means "download this". Anything else (no link, or a link
+ * already downloaded) means "save a WhatsApp status".
  */
 class ClipboardTapActivity : Activity() {
-
-    companion object {
-        private const val FRESH_WINDOW_MS = 60_000L
-    }
 
     private var handled = false
 
@@ -42,9 +35,13 @@ class ClipboardTapActivity : Activity() {
         if (handled) return
         handled = true
 
-        val fresh = freshlyCopiedText()
-        val url = Prefs.firstUrl(fresh)
-        val isNewLink = url != null && url != Prefs.lastDownloadedUrl(this)
+        val url = Prefs.firstUrl(clipboardText())
+        // A video link the user hasn't downloaded yet always means "download
+        // this" — no matter how long ago it was copied. Only when there's no
+        // such link do we fall through to saving a WhatsApp status.
+        val isNewLink = url != null &&
+            Prefs.isSupportedVideoLink(url) &&
+            url != Prefs.lastDownloadedUrl(this)
 
         val intent = if (isNewLink) {
             // Just copied a link → download it (TikTok/Instagram/etc.).
@@ -63,19 +60,10 @@ class ClipboardTapActivity : Activity() {
         overridePendingTransition(0, 0)
     }
 
-    /** Clipboard text, but only if it was copied within [FRESH_WINDOW_MS]. */
-    private fun freshlyCopiedText(): String? = runCatching {
+    private fun clipboardText(): String? = runCatching {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         val clip = clipboard.primaryClip ?: return@runCatching null
         if (clip.itemCount <= 0) return@runCatching null
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val copiedAt = clip.description?.timestamp ?: 0L
-            // timestamp is 0 on some ROMs — treat unknown age as "not fresh" so
-            // a stale link can never hijack a status save.
-            if (copiedAt <= 0L) return@runCatching null
-            if (System.currentTimeMillis() - copiedAt > FRESH_WINDOW_MS) return@runCatching null
-        }
         clip.getItemAt(0).coerceToText(this)?.toString()
     }.getOrNull()
 }

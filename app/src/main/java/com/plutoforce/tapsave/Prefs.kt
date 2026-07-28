@@ -53,6 +53,24 @@ object Prefs {
         prefs(context).edit().putString(KEY_LAST_URL, value).apply()
     }
 
+    /** Hosts the backend can actually download from. */
+    private val SUPPORTED_HOSTS = listOf(
+        "tiktok.com", "douyin.com",
+        "instagram.com", "instagr.am",
+        "pinterest.", "pin.it",
+        "facebook.com", "fb.watch",
+        "twitter.com", "x.com",
+        "reddit.com", "redd.it",
+        "snapchat.com", "vimeo.com", "dailymotion.com", "tumblr.com"
+    )
+
+    /** True if [url] looks like a video link TapSave can download. */
+    fun isSupportedVideoLink(url: String): Boolean {
+        val lower = url.lowercase()
+        if (lower.contains("youtube.com") || lower.contains("youtu.be")) return false
+        return SUPPORTED_HOSTS.any { lower.contains(it) }
+    }
+
     /** Returns the first http(s) URL found in [text], or null. */
     fun firstUrl(text: String?): String? {
         if (text.isNullOrBlank()) return null

@@ -2,8 +2,12 @@
 
 A tiny HTTP service that fetches a public video with yt-dlp and streams the
 resulting file back to the phone. It exists because TikTok / Instagram /
-YouTube / Pinterest expose no public download API, and reliable extraction is
-not practical to do on-device.
+Pinterest expose no public download API, and reliable extraction is not
+practical to do on-device.
+
+/resolve is the fast path: it hands the phone a direct CDN link so the bytes
+never pass through this server. /download is the fallback for anything that
+needs merging, transcoding or mp3 extraction.
 
 Intended for personal use with content you own or have permission to download.
 Downloading other people's videos or removing watermarks may violate a
@@ -11,6 +15,7 @@ platform's Terms of Service and the creator's copyright.
 """
 
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -67,7 +72,7 @@ INDEX_HTML = """<!doctype html>
 <body>
   <div class="card">
     <h1>TapSave</h1>
-    <p class="sub">Paste a video link (TikTok, Instagram, YouTube, Pinterest) and download it.</p>
+    <p class="sub">Paste a video link (TikTok, Instagram, Pinterest) and download it.</p>
     <button id="paste">📋 Paste link &amp; download</button>
     <input id="url" type="url" placeholder="or paste the link here…" autocomplete="off">
     <div class="row">
@@ -215,24 +220,65 @@ def maybe_transcode(path: str, workdir: str) -> str:
     except Exception:
         return path
 
-# YouTube blocks the default web client from server IPs ("Sign in to confirm
-# you're not a bot"). Which clients work depends on whether we have cookies:
-# without cookies the mobile/tv clients dodge the check better; with cookies the
-# default/mweb clients actually make use of them.
-YT_ARGS_NO_COOKIES = "youtube:player_client=android,ios,tv"
-YT_ARGS_WITH_COOKIES = "youtube:player_client=default,mweb"
-
 # Optional Netscape cookies.txt. On Render, add it as a Secret File named
-# cookies.txt (mounted at /etc/secrets/cookies.txt). If present it's passed to
-# yt-dlp, which lets YouTube downloads through from the server IP.
+# cookies.txt (mounted at /etc/secrets/cookies.txt). Mainly useful for
+# private/age-gated Instagram posts.
 COOKIES_FILE = os.environ.get("YTDLP_COOKIES", "/etc/secrets/cookies.txt")
 
 _YOUTUBE_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
+
+YOUTUBE_MESSAGE = "YouTube isn't supported. TikTok, Instagram and Pinterest work."
+
+MOBILE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+)
 
 
 def is_youtube(url: str) -> bool:
     host = urlparse(url).netloc.lower()
     return any(h in host for h in _YOUTUBE_HOSTS)
+
+
+def is_tiktok(url: str) -> bool:
+    return "tiktok" in urlparse(url).netloc.lower()
+
+
+def attempt_variants(url: str):
+    """
+    Extra yt-dlp arguments to try in order.
+
+    TikTok often answers "Video not available" to datacenter IPs on its default
+    API host, so we retry through the alternate regional hosts and finally with a
+    phone user-agent. Each attempt is cheap because it fails fast.
+    """
+    if is_tiktok(url):
+        return [
+            [],
+            ["--extractor-args", "tiktok:api_hostname=api22-normal-c-useast2a.tiktokv.com"],
+            ["--extractor-args", "tiktok:api_hostname=api16-normal-c-useast1a.tiktokv.com"],
+            ["--user-agent", MOBILE_UA],
+        ]
+    return [[], ["--user-agent", MOBILE_UA]]
+
+
+def friendly_error(detail: str, url: str) -> str:
+    """Turns a wall of yt-dlp output into one sentence a person can act on."""
+    low = detail.lower()
+    if "video not available" in low or "content isn't available" in low:
+        if is_tiktok(url):
+            return (
+                "TikTok wouldn't serve this video to the server. It's usually "
+                "private, region-locked or deleted — try another link."
+            )
+        return "That video isn't available to download (private, deleted or region-locked)."
+    if "login required" in low or "log in" in low or "rate-limit" in low:
+        return "That post needs a login, so it can't be downloaded."
+    if "unsupported url" in low:
+        return "That link isn't a video TapSave can download."
+    if "unable to download webpage" in low or "timed out" in low:
+        return "Couldn't reach that site just now. Try again in a moment."
+    return "Couldn't download that video. Try another link."
 
 
 @app.get("/health")
@@ -276,7 +322,6 @@ def probe(url: str = Query(...)):
     has_cookies = os.path.exists(COOKIES_FILE)
     common = [
         "--no-warnings", "--force-ipv4",
-        "--extractor-args", YT_ARGS_WITH_COOKIES if has_cookies else YT_ARGS_NO_COOKIES,
     ]
     cookie_args = []
     if has_cookies:
@@ -311,6 +356,99 @@ def probe(url: str = Query(...)):
     )
 
 
+_HEIGHT_LIMIT = {"high": 10000, "medium": 720, "low": 480}
+
+
+@app.get("/resolve")
+def resolve(
+    url: str = Query(..., description="Public video URL"),
+    quality: str = Query("high", description="high | medium | low"),
+):
+    """
+    Returns a direct CDN link for the video so the phone can download it itself.
+
+    This is the fast path: the server only does the (quick) extraction, and the
+    bytes travel straight from the platform's CDN to the phone instead of being
+    relayed through this box. Only single-file streams that already contain both
+    video and audio qualify; anything needing a merge falls back to /download.
+    """
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="URL must start with http(s)://")
+    if is_youtube(url):
+        raise HTTPException(status_code=400, detail=YOUTUBE_MESSAGE)
+
+    base = ["yt-dlp", "-J", "--no-playlist", "--no-warnings", "--force-ipv4"]
+    workdir = tempfile.mkdtemp(prefix="tapsave_res_")
+    try:
+        if os.path.exists(COOKIES_FILE):
+            writable = os.path.join(workdir, "cookies.txt")
+            try:
+                shutil.copyfile(COOKIES_FILE, writable)
+                base += ["--cookies", writable]
+            except OSError:
+                pass
+
+        info = None
+        last_error = "unknown error"
+        for extra in attempt_variants(url):
+            try:
+                out = subprocess.run(
+                    base + extra + [url], check=True, capture_output=True, timeout=90
+                ).stdout
+                info = json.loads(out.decode(errors="ignore"))
+                break
+            except subprocess.TimeoutExpired:
+                last_error = "timed out"
+            except subprocess.CalledProcessError as exc:
+                last_error = exc.stderr.decode(errors="ignore") if exc.stderr else "failed"
+            except (ValueError, json.JSONDecodeError):
+                last_error = "could not read video info"
+
+        if not info:
+            raise HTTPException(status_code=502, detail=friendly_error(last_error, url))
+
+        limit = _HEIGHT_LIMIT.get(quality, _HEIGHT_LIMIT["high"])
+        best = None
+        for fmt in info.get("formats") or []:
+            # Needs its own audio and video, a usable URL, and a sane height.
+            if not fmt.get("url"):
+                continue
+            if fmt.get("vcodec") in (None, "none") or fmt.get("acodec") in (None, "none"):
+                continue
+            if fmt.get("protocol") not in (None, "https", "http"):
+                continue
+            height = fmt.get("height") or 0
+            if height and height > limit:
+                continue
+            codec = (fmt.get("vcodec") or "").lower()
+            # H.264 first: TikTok's H.265 streams play silently on many phones.
+            score = (
+                1 if codec.startswith(("avc", "h264")) else 0,
+                height,
+                fmt.get("tbr") or 0,
+            )
+            if best is None or score > best[0]:
+                best = (score, fmt)
+
+        if not best:
+            return {"direct": False}
+
+        fmt = best[1]
+        codec = (fmt.get("vcodec") or "").lower()
+        if not codec.startswith(("avc", "h264")):
+            # Would need re-encoding to keep audio working; let /download do it.
+            return {"direct": False}
+
+        return {
+            "direct": True,
+            "url": fmt["url"],
+            "headers": fmt.get("http_headers") or {},
+            "ext": fmt.get("ext") or "mp4",
+        }
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 @app.get("/download")
 def download(
     url: str = Query(..., description="Public video URL to fetch"),
@@ -324,10 +462,7 @@ def download(
     # Reject YouTube immediately — it can't be downloaded from a cloud server and
     # attempting it can wedge the free instance for other downloads.
     if is_youtube(url):
-        raise HTTPException(
-            status_code=400,
-            detail="YouTube isn't supported here. TikTok, Instagram and Pinterest work.",
-        )
+        raise HTTPException(status_code=400, detail=YOUTUBE_MESSAGE)
 
     workdir = tempfile.mkdtemp(prefix="tapsave_")
     output_template = os.path.join(workdir, f"{uuid.uuid4().hex}.%(ext)s")
@@ -338,8 +473,6 @@ def download(
         "--no-playlist",
         "--no-warnings",
         "--force-ipv4",
-        "--extractor-args",
-        YT_ARGS_WITH_COOKIES if has_cookies else YT_ARGS_NO_COOKIES,
         "-o",
         output_template,
     ]
@@ -372,22 +505,21 @@ def download(
         except OSError:
             pass
 
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Download timed out")
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.decode(errors="ignore") if exc.stderr else "unknown error"
-        detail = detail[-1500:] if debug else detail[-400:]
-        if "not a bot" in detail or "Sign in to confirm" in detail:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "YouTube can't be downloaded from this server — Google blocks "
-                    "cloud hosts. TikTok, Instagram and Pinterest work fine."
-                ),
-            )
-        raise HTTPException(status_code=502, detail=f"yt-dlp failed: {detail}")
+    last_error = "unknown error"
+    ok = False
+    for extra in attempt_variants(url):
+        try:
+            subprocess.run(cmd + extra, check=True, capture_output=True, timeout=300)
+            ok = True
+            break
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="Download timed out")
+        except subprocess.CalledProcessError as exc:
+            last_error = exc.stderr.decode(errors="ignore") if exc.stderr else "unknown error"
+
+    if not ok:
+        detail = last_error[-1500:] if debug else friendly_error(last_error, url)
+        raise HTTPException(status_code=502, detail=detail)
 
     files = glob.glob(os.path.join(workdir, "*"))
     if not files:
