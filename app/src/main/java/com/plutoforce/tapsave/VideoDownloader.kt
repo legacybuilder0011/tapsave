@@ -65,8 +65,26 @@ object VideoDownloader {
             return Result(false, "Set the server address in TapSave first")
         }
 
-        // Try the direct-from-CDN path first; it's much faster.
         if (!audioOnly) {
+            // TikTok refuses datacenter IPs, so resolve it on the phone (which
+            // has an ordinary mobile IP) and pull straight from TikTok's CDN.
+            if (TikTokExtractor.isTikTok(videoUrl)) {
+                val onDevice = runCatching { TikTokExtractor.resolve(videoUrl) }.getOrNull()
+                if (onDevice != null) {
+                    val saved = runCatching {
+                        saveFrom(
+                            context,
+                            openDirect(Resolved(onDevice.url, onDevice.headers)),
+                            audioOnly = false,
+                            onProgress = onProgress
+                        )
+                    }.getOrNull()
+                    if (saved != null && saved.ok) return saved
+                }
+            }
+
+            // Otherwise ask the backend for a direct CDN link — still avoids
+            // relaying the whole file through the server.
             val resolved = runCatching { resolve(base, videoUrl, quality) }.getOrNull()
             if (resolved != null) {
                 val direct = runCatching {
@@ -129,7 +147,9 @@ object VideoDownloader {
         resolved.headers.forEach { (key, value) ->
             runCatching { connection.setRequestProperty(key, value) }
         }
-        if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+        // A ranged request answers 206, not 200 — both are fine.
+        val code = connection.responseCode
+        if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
             connection.disconnect()
             throw IllegalStateException("CDN refused the download")
         }

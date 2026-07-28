@@ -267,9 +267,11 @@ def friendly_error(detail: str, url: str) -> str:
     low = detail.lower()
     if "video not available" in low or "content isn't available" in low:
         if is_tiktok(url):
+            # TikTok routinely refuses datacenter IPs even for public videos, so
+            # don't blame the link — the app retries on the phone itself.
             return (
-                "TikTok wouldn't serve this video to the server. It's usually "
-                "private, region-locked or deleted — try another link."
+                "TikTok blocked the server for this video. The app will try "
+                "again from your phone — if that also fails, try another link."
             )
         return "That video isn't available to download (private, deleted or region-locked)."
     if "login required" in low or "log in" in low or "rate-limit" in low:
