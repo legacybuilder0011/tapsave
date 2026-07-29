@@ -312,10 +312,76 @@ class FloatingButton:
         self.toast("Downloading…")
         threading.Thread(target=self.download, args=(match.group(0),), daemon=True).start()
 
+    def download_local(self, video_url: str, quality: str, out_dir: Path):
+        """
+        Extract and download on this PC.
+
+        TikTok and Instagram refuse cloud/datacenter IPs, so routing everything
+        through the server made those links fail here even though this machine
+        has an ordinary home connection they serve happily. Doing it locally is
+        both reliable and quicker — nothing is relayed. Returns the saved file,
+        or None to let the server have a go.
+        """
+        try:
+            import yt_dlp
+        except Exception:
+            return None
+
+        formats = {
+            "high": "b[vcodec~='^(avc|h264)']/b",
+            "medium": "b[height<=720][vcodec~='^(avc|h264)']/b[height<=720]/b",
+            "low": "b[height<=480][vcodec~='^(avc|h264)']/b[height<=480]/b",
+        }
+        stem = f"video_{int(time.time())}"
+
+        def hook(d):
+            if d.get("status") == "downloading":
+                total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                if total:
+                    self.set_percent(int(d.get("downloaded_bytes", 0) * 100 / total))
+            elif d.get("status") == "finished":
+                self.set_percent(100)
+
+        options = {
+            "outtmpl": str(out_dir / (stem + ".%(ext)s")),
+            # A single progressive file, so no ffmpeg is needed to merge.
+            "format": formats.get(quality, formats["high"]),
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "progress_hooks": [hook],
+        }
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.extract_info(video_url, download=True)
+        except Exception:
+            return None
+
+        produced = sorted(out_dir.glob(stem + ".*"))
+        return produced[0] if produced else None
+
     def download(self, video_url: str):
         audio = bool(self.audio_var.get())
         quality = self.quality_var.get()
         try:
+            out_dir = Path.home() / "Downloads" / "TapSave"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            # Try this PC first; only audio (which needs ffmpeg) must use the server.
+            if not audio:
+                local = self.download_local(video_url, quality, out_dir)
+                if local is not None:
+                    self.set_percent(None)
+                    self.set_color(COLOR_OK)
+                    add_history({
+                        "name": local.name,
+                        "path": str(local),
+                        "audio": False,
+                        "time": int(time.time()),
+                    })
+                    self.toast(f"Saved to {local.parent}", COLOR_OK)
+                    return
+
             base = self.backend.strip().rstrip("/")
             if not base:
                 self.toast("Set the server address (right-click → Server address).", COLOR_ERR)
@@ -324,8 +390,6 @@ class FloatingButton:
                 base + "/download?url=" + urllib.parse.quote(video_url, safe="")
                 + "&quality=" + quality + ("&audio=1" if audio else "")
             )
-            out_dir = Path.home() / "Downloads" / "TapSave"
-            out_dir.mkdir(parents=True, exist_ok=True)
             ext = ".mp3" if audio else ".mp4"
             out_file = out_dir / f"{'audio' if audio else 'video'}_{int(time.time())}{ext}"
 

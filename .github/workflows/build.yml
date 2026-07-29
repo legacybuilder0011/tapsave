@@ -45,13 +45,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install PyInstaller
-        run: pip install pyinstaller
+      - name: Install PyInstaller and yt-dlp
+        # yt-dlp is bundled so the desktop app can extract on the user's own
+        # connection — TikTok and Instagram refuse the server's datacenter IP.
+        run: pip install pyinstaller yt-dlp
       - name: Stamp desktop build version
         shell: bash
         run: echo "BUILD = ${{ github.run_number }}" > desktop/_build_version.py
       - name: Build the desktop .exe
-        run: pyinstaller --onefile --windowed --name TapSave --paths desktop desktop/tapsave_desktop.py
+        run: pyinstaller --onefile --windowed --name TapSave --collect-all yt_dlp --paths desktop desktop/tapsave_desktop.py
       - uses: actions/upload-artifact@v4
         with:
           name: exe

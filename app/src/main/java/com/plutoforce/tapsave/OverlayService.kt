@@ -146,10 +146,6 @@ class OverlayService : Service() {
         val audio = Prefs.audioOnly(this)
         val quality = Prefs.quality(this)
 
-        // Remember this link so tapping the button again (e.g. to save a
-        // WhatsApp status) doesn't re-download the same stale link.
-        Prefs.setLastDownloadedUrl(this, url)
-
         isDownloading = true
         setPreparing()
         toast(if (audio) "Downloading audio…" else "Downloading…")
@@ -161,6 +157,10 @@ class OverlayService : Service() {
             handler.post {
                 isDownloading = false
                 if (result.ok) {
+                    // Only remember it once it actually worked. Marking it up
+                    // front meant a failed attempt could never be retried — the
+                    // next tap treated the link as already handled.
+                    Prefs.setLastDownloadedUrl(this, url)
                     if (result.uri != null && result.name != null) {
                         DownloadStore.add(this, result.name, url, result.uri, result.audio)
                     }
@@ -185,7 +185,7 @@ class OverlayService : Service() {
             return
         }
         if (hadUnsupportedLink && StatusSaver.newest() == null) {
-            toast("That link isn't one TapSave can download")
+            toast("Already saved. Copy a new link, or open a status in WhatsApp.")
             return
         }
         if (!StatusSaver.hasAccess(this)) {
