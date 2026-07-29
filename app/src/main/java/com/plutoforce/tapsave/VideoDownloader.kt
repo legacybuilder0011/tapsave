@@ -79,7 +79,10 @@ object VideoDownloader {
             // an ordinary mobile IP) and pull straight from the platform's CDN.
             // This is both the reliable path and by far the fastest.
             if (VideoPageExtractor.canHandle(videoUrl)) {
-                val onDevice = runCatching { VideoPageExtractor.resolve(videoUrl) }.getOrNull()
+                val onDevice = runCatching {
+                    // Bounded so a platform that won't answer can't eat the budget.
+                    VideoPageExtractor.resolve(videoUrl, remaining(deadline).coerceAtMost(22_000))
+                }.getOrNull()
                 if (onDevice != null) {
                     val saved = runCatching {
                         saveFrom(
