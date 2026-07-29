@@ -30,6 +30,14 @@ object VideoPageExtractor {
         url.contains("instagram.com", ignoreCase = true) ||
             url.contains("instagr.am", ignoreCase = true)
 
+    /**
+     * Platforms that refuse cloud/datacenter IPs. For these the server can't
+     * help at all, so a failed on-device attempt should give up quickly rather
+     * than spending the rest of the budget on a guaranteed failure.
+     */
+    fun isBlockedForServers(url: String): Boolean =
+        url.contains("tiktok.com", ignoreCase = true) || isInstagram(url)
+
     /** Worth attempting on-device for anything except YouTube. */
     fun canHandle(url: String): Boolean =
         !url.contains("youtube.com", ignoreCase = true) &&
@@ -107,8 +115,8 @@ object VideoPageExtractor {
                     .openConnection() as HttpURLConnection
                 ).apply {
                 requestMethod = "GET"
-                connectTimeout = 15_000
-                readTimeout = 25_000
+                connectTimeout = 8_000
+                readTimeout = 12_000
                 setRequestProperty("User-Agent", UA)
                 setRequestProperty("x-ig-app-id", IG_APP_ID)
                 setRequestProperty("Accept", "*/*")
@@ -147,11 +155,11 @@ object VideoPageExtractor {
         var current = pageUrl
         var cookies = ""
         // Short links (vm.tiktok.com, pin.it) bounce before the real page.
-        repeat(6) {
+        repeat(4) {
             val connection = (URL(current).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 20_000
-                readTimeout = 30_000
+                connectTimeout = 8_000
+                readTimeout = 12_000
                 instanceFollowRedirects = false
                 setRequestProperty("User-Agent", UA)
                 setRequestProperty("Accept", "text/html,application/xhtml+xml")

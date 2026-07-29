@@ -32,6 +32,10 @@ object VideoDownloader {
 
     private data class Resolved(val url: String, val headers: Map<String, String>)
 
+    /** Whole-attempt budget, so a failing download never spins for minutes. */
+    private const val TOTAL_BUDGET_MS = 55_000L
+    private const val MIN_STEP_MS = 6_000
+
     /**
      * Pokes the backend so it's already awake when a download starts. Free hosts
      * sleep when idle and can take a while to boot on the first request.
@@ -65,6 +69,11 @@ object VideoDownloader {
             return Result(false, "Set the server address in TapSave first")
         }
 
+        // One budget for the whole attempt. Without this the fallbacks stack up
+        // — page fetch, then /resolve, then /download — and a failing download
+        // could sit there for well over two minutes before admitting defeat.
+        val deadline = System.currentTimeMillis() + TOTAL_BUDGET_MS
+
         if (!audioOnly) {
             // Platforms refuse datacenter IPs, so resolve on the phone (which has
             // an ordinary mobile IP) and pull straight from the platform's CDN.
@@ -75,7 +84,7 @@ object VideoDownloader {
                     val saved = runCatching {
                         saveFrom(
                             context,
-                            openDirect(Resolved(onDevice.url, onDevice.headers)),
+                            openDirect(Resolved(onDevice.url, onDevice.headers), remaining(deadline)),
                             audioOnly = false,
                             onProgress = onProgress
                         )
@@ -84,38 +93,69 @@ object VideoDownloader {
                 }
             }
 
-            // Otherwise ask the backend for a direct CDN link — still avoids
-            // relaying the whole file through the server.
-            val resolved = runCatching { resolve(base, videoUrl, quality) }.getOrNull()
-            if (resolved != null) {
-                val direct = runCatching {
-                    saveFrom(context, openDirect(resolved), audioOnly = false, onProgress = onProgress)
+            if (remaining(deadline) < MIN_STEP_MS) return timedOut(videoUrl)
+
+            // Asking the server to resolve a TikTok is a guaranteed dead end —
+            // it's the datacenter IP that TikTok refuses. Don't burn the budget.
+            if (!VideoPageExtractor.isBlockedForServers(videoUrl)) {
+                val resolved = runCatching {
+                    resolve(base, videoUrl, quality, remaining(deadline))
                 }.getOrNull()
-                if (direct != null && direct.ok) return direct
-                // Direct attempt failed (expired link, odd headers) — fall through.
+                if (resolved != null) {
+                    val direct = runCatching {
+                        saveFrom(
+                            context,
+                            openDirect(resolved, remaining(deadline)),
+                            audioOnly = false,
+                            onProgress = onProgress
+                        )
+                    }.getOrNull()
+                    if (direct != null && direct.ok) return direct
+                }
             }
         }
+
+        if (remaining(deadline) < MIN_STEP_MS) return timedOut(videoUrl)
 
         return runCatching {
             saveFrom(
                 context,
-                openBackend(base, videoUrl, audioOnly, quality),
+                openBackend(base, videoUrl, audioOnly, quality, remaining(deadline)),
                 audioOnly,
                 onProgress
             )
-        }.getOrElse { e -> Result(false, e.message ?: "Download failed") }
+        }.getOrElse { e ->
+            val message = e.message
+            if (message.isNullOrBlank() || e is java.net.SocketTimeoutException) {
+                timedOut(videoUrl)
+            } else {
+                Result(false, message)
+            }
+        }
+    }
+
+    private fun remaining(deadline: Long): Int =
+        (deadline - System.currentTimeMillis()).coerceAtLeast(0L).toInt()
+
+    private fun timedOut(videoUrl: String): Result {
+        val where = if (VideoPageExtractor.isBlockedForServers(videoUrl)) {
+            "Couldn't reach this video. Check your connection and try again."
+        } else {
+            "Took too long — try again, or check the link is public."
+        }
+        return Result(false, where)
     }
 
     // --- Connections -------------------------------------------------------
 
     /** Asks the backend for a direct CDN link. Returns null if there isn't one. */
-    private fun resolve(base: String, videoUrl: String, quality: String): Resolved? {
+    private fun resolve(base: String, videoUrl: String, quality: String, budgetMs: Int): Resolved? {
         val endpoint = "$base/resolve?url=" + URLEncoder.encode(videoUrl, "UTF-8") +
             "&quality=" + quality
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 20_000
-            readTimeout = 60_000
+            connectTimeout = 10_000
+            readTimeout = budgetMs.coerceIn(MIN_STEP_MS, 25_000)
         }
         try {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
@@ -138,11 +178,11 @@ object VideoDownloader {
         }
     }
 
-    private fun openDirect(resolved: Resolved): HttpURLConnection {
+    private fun openDirect(resolved: Resolved, budgetMs: Int): HttpURLConnection {
         val connection = (URL(resolved.url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 20_000
-            readTimeout = 60_000
+            connectTimeout = 10_000
+            readTimeout = budgetMs.coerceIn(MIN_STEP_MS, 45_000)
             instanceFollowRedirects = true
         }
         resolved.headers.forEach { (key, value) ->
@@ -161,7 +201,8 @@ object VideoDownloader {
         base: String,
         videoUrl: String,
         audioOnly: Boolean,
-        quality: String
+        quality: String,
+        budgetMs: Int
     ): HttpURLConnection {
         val endpoint = buildString {
             append(base)
@@ -173,9 +214,9 @@ object VideoDownloader {
         }
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 20_000
-            // Keep this short enough that a stuck server can't spin for minutes.
-            readTimeout = 90_000
+            connectTimeout = 10_000
+            // Bounded by whatever is left of the overall budget.
+            readTimeout = budgetMs.coerceIn(MIN_STEP_MS, 45_000)
             instanceFollowRedirects = true
         }
         if (connection.responseCode != HttpURLConnection.HTTP_OK) {
