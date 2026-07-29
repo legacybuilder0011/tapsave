@@ -37,6 +37,11 @@ object VideoPageExtractor {
 
     /** Returns a directly downloadable link, or null if the page didn't yield one. */
     fun resolve(pageUrl: String): Resolved? {
+        // Instagram's own media API answers logged-out requests from a phone IP,
+        // and is far more reliable than scraping the page.
+        if (isInstagram(pageUrl)) {
+            instagramViaApi(pageUrl)?.let { return it }
+        }
         for (candidate in candidatePages(pageUrl)) {
             val page = fetch(candidate) ?: continue
             val media = findMediaUrl(page.html) ?: continue
@@ -68,6 +73,71 @@ object VideoPageExtractor {
             "https://www.instagram.com/$kind/$code/embed/captioned/",
             "https://www.instagram.com/$kind/$code/embed/",
             pageUrl
+        )
+    }
+
+    // --- Instagram media API ----------------------------------------------
+
+    // Instagram's public web app id. Sending it makes the media endpoint answer
+    // logged-out requests for public posts.
+    private const val IG_APP_ID = "936619743392459"
+    private const val IG_ALPHABET =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+    /** A post's shortcode is its numeric id written in base64. */
+    private fun shortcodeToMediaId(shortcode: String): String? {
+        var id = java.math.BigInteger.ZERO
+        val base = java.math.BigInteger.valueOf(64L)
+        for (c in shortcode) {
+            val index = IG_ALPHABET.indexOf(c)
+            if (index < 0) return null
+            id = id.multiply(base).add(java.math.BigInteger.valueOf(index.toLong()))
+        }
+        return if (id.signum() > 0) id.toString() else null
+    }
+
+    private fun instagramViaApi(pageUrl: String): Resolved? {
+        val shortcode = Regex("/(?:reels?|p|tv)/([A-Za-z0-9_-]+)").find(pageUrl)
+            ?.groupValues?.get(1) ?: return null
+        val mediaId = shortcodeToMediaId(shortcode) ?: return null
+
+        val json = runCatching {
+            val connection = (
+                URL("https://i.instagram.com/api/v1/media/$mediaId/info/")
+                    .openConnection() as HttpURLConnection
+                ).apply {
+                requestMethod = "GET"
+                connectTimeout = 15_000
+                readTimeout = 25_000
+                setRequestProperty("User-Agent", UA)
+                setRequestProperty("x-ig-app-id", IG_APP_ID)
+                setRequestProperty("Accept", "*/*")
+            }
+            try {
+                if (connection.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                connection.disconnect()
+            }
+        }.getOrNull() ?: return null
+
+        val media = runCatching {
+            val items = org.json.JSONObject(json).optJSONArray("items") ?: return@runCatching null
+            val item = items.optJSONObject(0) ?: return@runCatching null
+            // A carousel keeps its videos one level down.
+            val holder = item.optJSONArray("carousel_media")?.optJSONObject(0) ?: item
+            holder.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url")
+        }.getOrNull()
+
+        if (media.isNullOrBlank()) return null
+        return Resolved(
+            media,
+            mapOf(
+                "User-Agent" to UA,
+                "Referer" to "https://www.instagram.com/",
+                "Accept" to "*/*",
+                "Range" to "bytes=0-"
+            )
         )
     }
 

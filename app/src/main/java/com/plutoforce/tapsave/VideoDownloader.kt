@@ -114,8 +114,8 @@ object VideoDownloader {
             "&quality=" + quality
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 30_000
-            readTimeout = 120_000
+            connectTimeout = 20_000
+            readTimeout = 60_000
         }
         try {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
@@ -141,8 +141,8 @@ object VideoDownloader {
     private fun openDirect(resolved: Resolved): HttpURLConnection {
         val connection = (URL(resolved.url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 30_000
-            readTimeout = 120_000
+            connectTimeout = 20_000
+            readTimeout = 60_000
             instanceFollowRedirects = true
         }
         resolved.headers.forEach { (key, value) ->
@@ -173,8 +173,9 @@ object VideoDownloader {
         }
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 30_000
-            readTimeout = 300_000
+            connectTimeout = 20_000
+            // Keep this short enough that a stuck server can't spin for minutes.
+            readTimeout = 90_000
             instanceFollowRedirects = true
         }
         if (connection.responseCode != HttpURLConnection.HTTP_OK) {

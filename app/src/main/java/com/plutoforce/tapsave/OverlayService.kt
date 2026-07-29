@@ -58,6 +58,7 @@ class OverlayService : Service() {
 
     @Volatile
     private var isDownloading = false
+    private var prepareStartedAt = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -234,14 +235,34 @@ class OverlayService : Service() {
         }.start()
     }
 
-    /** Connecting / preparing: spinner, no percentage yet. */
+    /**
+     * Connecting / preparing. Shows a spinner plus the seconds elapsed, so a
+     * slow extraction still looks alive instead of frozen.
+     */
     private fun setPreparing() {
         iconView?.visibility = View.GONE
         progressView?.visibility = View.VISIBLE
         percentView?.visibility = View.GONE
+        prepareStartedAt = System.currentTimeMillis()
+        handler.removeCallbacks(elapsedTicker)
+        handler.postDelayed(elapsedTicker, 3000L)
+    }
+
+    /** Counts up next to the spinner until real progress arrives. */
+    private val elapsedTicker = object : Runnable {
+        override fun run() {
+            if (!isDownloading) return
+            val seconds = ((System.currentTimeMillis() - prepareStartedAt) / 1000L).toInt()
+            progressView?.visibility = View.GONE
+            iconView?.visibility = View.GONE
+            percentView?.visibility = View.VISIBLE
+            percentView?.text = "${seconds}s"
+            handler.postDelayed(this, 1000L)
+        }
     }
 
     private fun setPercent(pct: Int) {
+        handler.removeCallbacks(elapsedTicker)
         progressView?.visibility = View.GONE
         iconView?.visibility = View.GONE
         percentView?.visibility = View.VISIBLE
@@ -249,6 +270,7 @@ class OverlayService : Service() {
     }
 
     private fun setIdle() {
+        handler.removeCallbacks(elapsedTicker)
         percentView?.visibility = View.GONE
         progressView?.visibility = View.GONE
         iconView?.setImageResource(R.drawable.ic_download)
@@ -256,6 +278,7 @@ class OverlayService : Service() {
     }
 
     private fun showSuccessThenIdle() {
+        handler.removeCallbacks(elapsedTicker)
         percentView?.visibility = View.GONE
         progressView?.visibility = View.GONE
         iconView?.setImageResource(R.drawable.ic_check)
