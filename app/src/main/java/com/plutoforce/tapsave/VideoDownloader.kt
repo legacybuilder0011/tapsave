@@ -66,10 +66,11 @@ object VideoDownloader {
         }
 
         if (!audioOnly) {
-            // TikTok refuses datacenter IPs, so resolve it on the phone (which
-            // has an ordinary mobile IP) and pull straight from TikTok's CDN.
-            if (TikTokExtractor.isTikTok(videoUrl)) {
-                val onDevice = runCatching { TikTokExtractor.resolve(videoUrl) }.getOrNull()
+            // Platforms refuse datacenter IPs, so resolve on the phone (which has
+            // an ordinary mobile IP) and pull straight from the platform's CDN.
+            // This is both the reliable path and by far the fastest.
+            if (VideoPageExtractor.canHandle(videoUrl)) {
+                val onDevice = runCatching { VideoPageExtractor.resolve(videoUrl) }.getOrNull()
                 if (onDevice != null) {
                     val saved = runCatching {
                         saveFrom(

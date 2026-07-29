@@ -13,29 +13,57 @@ import android.os.Looper
  * [onWindowFocusChanged] before reading — reading in onCreate returns null
  * because the window has not gained focus yet.
  *
- * A copied video link means "download this". Anything else (no link, or a link
- * already downloaded) means "save a WhatsApp status".
+ * The clipboard can also come back empty for a moment right after another app
+ * writes to it (tapping "Copy link" and the button in quick succession), so we
+ * retry briefly instead of immediately deciding there is no link. Getting that
+ * wrong sent people to the WhatsApp status picker when they meant to download.
+ *
+ * A copied video link means "download this". Anything else means "save a
+ * WhatsApp status".
  */
 class ClipboardTapActivity : Activity() {
 
+    private companion object {
+        const val RETRY_DELAY_MS = 120L
+        const val MAX_ATTEMPTS = 10      // ~1.2s of retrying
+        const val FALLBACK_MS = 1800L
+    }
+
+    private val handler = Handler(Looper.getMainLooper())
     private var handled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Safety net: if focus somehow never arrives, still try shortly after.
-        Handler(Looper.getMainLooper()).postDelayed({ readAndFinish() }, 500L)
+        // Safety net: if focus somehow never arrives, decide anyway.
+        handler.postDelayed({ decide(clipboardText()) }, FALLBACK_MS)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) readAndFinish()
+        if (hasFocus) attemptRead(0)
     }
 
-    private fun readAndFinish() {
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        super.onDestroy()
+    }
+
+    /** Polls the clipboard until it has something usable, or we run out of tries. */
+    private fun attemptRead(attempt: Int) {
+        if (handled) return
+        val text = clipboardText()
+        if (Prefs.firstUrl(text) != null || attempt >= MAX_ATTEMPTS) {
+            decide(text)
+        } else {
+            handler.postDelayed({ attemptRead(attempt + 1) }, RETRY_DELAY_MS)
+        }
+    }
+
+    private fun decide(clipboard: String?) {
         if (handled) return
         handled = true
 
-        val url = Prefs.firstUrl(clipboardText())
+        val url = Prefs.firstUrl(clipboard)
         // A video link the user hasn't downloaded yet always means "download
         // this" — no matter how long ago it was copied. Only when there's no
         // such link do we fall through to saving a WhatsApp status.
@@ -44,15 +72,16 @@ class ClipboardTapActivity : Activity() {
             url != Prefs.lastDownloadedUrl(this)
 
         val intent = if (isNewLink) {
-            // Just copied a link → download it (TikTok/Instagram/etc.).
             Intent(this, OverlayService::class.java).apply {
                 action = OverlayService.ACTION_DOWNLOAD
                 putExtra(OverlayService.EXTRA_URL, url)
             }
         } else {
-            // Not a fresh link → save the WhatsApp status being viewed (instant).
             Intent(this, OverlayService::class.java).apply {
                 action = OverlayService.ACTION_SAVE_STATUS
+                // Lets the service explain itself properly when a link was
+                // copied but isn't one we can download.
+                putExtra(OverlayService.EXTRA_HAD_LINK, url != null)
             }
         }
         startForegroundService(intent)

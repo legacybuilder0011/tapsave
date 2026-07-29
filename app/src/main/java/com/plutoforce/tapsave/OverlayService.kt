@@ -36,6 +36,7 @@ class OverlayService : Service() {
         const val ACTION_SHOW = "com.plutoforce.tapsave.SHOW"
         const val EXTRA_URL = "url"
         const val EXTRA_PATH = "path"
+        const val EXTRA_HAD_LINK = "had_link"
 
         private const val CHANNEL_ID = "tapsave_overlay"
         private const val NOTIFICATION_ID = 42
@@ -77,7 +78,8 @@ class OverlayService : Service() {
                 val url = intent.getStringExtra(EXTRA_URL)
                 if (!url.isNullOrBlank()) startDownload(url)
             }
-            ACTION_SAVE_STATUS -> startStatusSave()
+            ACTION_SAVE_STATUS ->
+                startStatusSave(intent.getBooleanExtra(EXTRA_HAD_LINK, false))
             ACTION_SAVE_STATUS_FILE -> {
                 val path = intent.getStringExtra(EXTRA_PATH)
                 if (!path.isNullOrBlank()) {
@@ -176,9 +178,13 @@ class OverlayService : Service() {
      * status is on screen (WhatsApp pre-downloads some in the background), a
      * quick picker of the newest few is shown instead of guessing wrong.
      */
-    private fun startStatusSave() {
+    private fun startStatusSave(hadUnsupportedLink: Boolean = false) {
         if (isDownloading) {
             toast("Busy — try again in a second")
+            return
+        }
+        if (hadUnsupportedLink && StatusSaver.newest() == null) {
+            toast("That link isn't one TapSave can download")
             return
         }
         if (!StatusSaver.hasAccess(this)) {
