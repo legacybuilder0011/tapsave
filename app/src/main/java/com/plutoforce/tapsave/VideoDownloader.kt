@@ -120,10 +120,19 @@ object VideoDownloader {
 
         if (remaining(deadline) < MIN_STEP_MS) return timedOut(videoUrl)
 
+        // For platforms that refuse datacenter IPs the server is a long shot, so
+        // give it a short slice rather than the whole remaining budget — that
+        // was the difference between failing at 58s and failing at ~35s.
+        val serverBudget = if (!audioOnly && VideoPageExtractor.isBlockedForServers(videoUrl)) {
+            remaining(deadline).coerceAtMost(12_000)
+        } else {
+            remaining(deadline)
+        }
+
         return runCatching {
             saveFrom(
                 context,
-                openBackend(base, videoUrl, audioOnly, quality, remaining(deadline)),
+                openBackend(base, videoUrl, audioOnly, quality, serverBudget),
                 audioOnly,
                 onProgress
             )

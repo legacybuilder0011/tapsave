@@ -95,8 +95,10 @@ object VideoPageExtractor {
             ?: return listOf(pageUrl)
         val kind = if (match.groupValues[1].startsWith("reel")) "reel" else match.groupValues[1]
         val code = match.groupValues[2]
+        val other = if (kind == "reel") "p" else "reel"
         return listOf(
             "https://www.instagram.com/$kind/$code/embed/captioned/",
+            "https://www.instagram.com/$other/$code/embed/captioned/",
             "https://www.instagram.com/$kind/$code/embed/",
             pageUrl
         )
@@ -278,7 +280,7 @@ object VideoPageExtractor {
     private val PATTERNS = listOf(
         Regex("\"playAddr\"\\s*:\\s*\"([^\"]{20,})\""),
         Regex("\"video_url\"\\s*:\\s*\"([^\"]{20,})\""),
-        Regex("\"video_versions\"[^\\[]*\\[\\s*\\{[^}]*?\"url\"\\s*:\\s*\"([^\"]{20,})\""),
+        Regex("\"video_versions\"\\s*:\\s*\\[.{0,200}?\"url\"\\s*:\\s*\"([^\"]{20,})\"", RegexOption.DOT_MATCHES_ALL),
         Regex(
             "<meta[^>]+property=[\"']og:video(?::secure_url|:url)?[\"'][^>]+content=[\"']([^\"']{20,})[\"']",
             RegexOption.IGNORE_CASE
@@ -295,6 +297,15 @@ object VideoPageExtractor {
     )
 
     private fun findMediaUrl(html: String): String? {
+        // Instagram's embed page carries its JSON inside a string, so the source
+        // literally reads \"video_url\":\"https:\/\/… — patterns looking for a
+        // plain quote never match it. Try the page as-is, then unescaped.
+        return matchIn(html) ?: matchIn(
+            html.replace("\\\"", "\"").replace("\\\\/", "/").replace("\\/", "/")
+        )
+    }
+
+    private fun matchIn(html: String): String? {
         for (pattern in PATTERNS) {
             val match = pattern.find(html) ?: continue
             // Most patterns capture a group; the bare-URL one matches the whole thing.
