@@ -110,7 +110,15 @@ object VideoPageExtractor {
     // logged-out requests for public posts.
     private const val IG_APP_ID = "936619743392459"
     // Instagram's public post query, used when the media endpoint declines.
-    private const val IG_DOC_ID = "8845758582119845"
+    private val IG_DOC_IDS = listOf(
+        "8845758582119845", "9510064595728286", "10015901848480474"
+    )
+
+    // Instagram's own Android app user-agent: the media endpoint answers this
+    // where it refuses a browser.
+    private const val IG_APP_UA =
+        "Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; " +
+            "ONEPLUS A3010; OnePlus3T; qcom; en_US; 314665256)"
     private const val IG_ALPHABET =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
@@ -129,72 +137,94 @@ object VideoPageExtractor {
     private fun shortcodeOf(pageUrl: String): String? =
         Regex("/(?:reels?|p|tv)/([A-Za-z0-9_-]+)").find(pageUrl)?.groupValues?.get(1)
 
-    /** The web media endpoint, which serves public posts without a login. */
+    /**
+     * Instagram's media endpoint, tried the way its own app asks.
+     *
+     * The browser host answers logged-out callers only sometimes; i.instagram.com
+     * with an Instagram app user-agent is what actually serves public posts, and
+     * is how working downloaders reach it. Both are tried, cheapest first.
+     */
     private fun instagramViaApi(pageUrl: String, budgetMs: Int): Resolved? {
         val mediaId = shortcodeOf(pageUrl)?.let { shortcodeToMediaId(it) } ?: return null
-        val json = httpGet(
-            "https://www.instagram.com/api/v1/media/$mediaId/info/",
-            budgetMs,
-            mapOf(
-                "User-Agent" to DESKTOP_UA,
-                "x-ig-app-id" to IG_APP_ID,
-                "Accept" to "*/*",
-                "Referer" to "https://www.instagram.com/"
-            )
-        ) ?: return null
-
-        val media = runCatching {
-            val items = org.json.JSONObject(json).optJSONArray("items") ?: return@runCatching null
-            val item = items.optJSONObject(0) ?: return@runCatching null
-            // A carousel keeps its videos one level down.
-            val holder = item.optJSONArray("carousel_media")?.optJSONObject(0) ?: item
-            holder.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url")
-        }.getOrNull()
-
-        return if (media.isNullOrBlank()) null else instagramResolved(media)
+        val attempts = listOf(
+            "https://i.instagram.com/api/v1/media/$mediaId/info/" to IG_APP_UA,
+            "https://www.instagram.com/api/v1/media/$mediaId/info/" to DESKTOP_UA
+        )
+        for ((endpoint, agent) in attempts) {
+            val json = httpGet(
+                endpoint,
+                budgetMs,
+                mapOf(
+                    "User-Agent" to agent,
+                    "x-ig-app-id" to IG_APP_ID,
+                    "x-ig-www-claim" to "0",
+                    "Accept" to "*/*",
+                    "Referer" to "https://www.instagram.com/"
+                )
+            ) ?: continue
+            videoFromApiJson(json)?.let { return instagramResolved(it) }
+        }
+        return null
     }
 
-    /** Instagram's public GraphQL query, used when the media endpoint declines. */
+    private fun videoFromApiJson(json: String): String? = runCatching {
+        val items = org.json.JSONObject(json).optJSONArray("items") ?: return@runCatching null
+        val item = items.optJSONObject(0) ?: return@runCatching null
+        // A carousel keeps its videos one level down.
+        val holder = item.optJSONArray("carousel_media")?.optJSONObject(0) ?: item
+        holder.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url")
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    /**
+     * Instagram's public post query. Meta rotates the query id, so a few known
+     * ones are tried rather than betting everything on a single value.
+     */
     private fun instagramViaGraphql(pageUrl: String, budgetMs: Int): Resolved? {
         val shortcode = shortcodeOf(pageUrl) ?: return null
-        val body = "variables=" +
-            java.net.URLEncoder.encode("{\"shortcode\":\"$shortcode\"}", "UTF-8") +
-            "&doc_id=$IG_DOC_ID"
+        val deadline = System.currentTimeMillis() + budgetMs
 
-        val json = runCatching {
-            val connection = (
-                URL("https://www.instagram.com/graphql/query")
-                    .openConnection() as HttpURLConnection
-                ).apply {
-                requestMethod = "POST"
-                doOutput = true
-                connectTimeout = 8_000
-                readTimeout = budgetMs.coerceIn(4_000, 12_000)
-                setRequestProperty("User-Agent", DESKTOP_UA)
-                setRequestProperty("x-ig-app-id", IG_APP_ID)
-                setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-                setRequestProperty("Accept", "*/*")
-            }
-            try {
-                connection.outputStream.use { it.write(body.toByteArray()) }
-                if (connection.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
-                connection.inputStream.bufferedReader().use { it.readText() }
-            } finally {
-                connection.disconnect()
-            }
-        }.getOrNull() ?: return null
+        for (docId in IG_DOC_IDS) {
+            if (System.currentTimeMillis() + MIN_ATTEMPT_MS > deadline) break
+            val body = "variables=" +
+                java.net.URLEncoder.encode("{\"shortcode\":\"$shortcode\"}", "UTF-8") +
+                "&doc_id=" + docId
 
-        val media = runCatching {
-            val node = org.json.JSONObject(json)
-                .optJSONObject("data")
-                ?.optJSONObject("xdt_shortcode_media") ?: return@runCatching null
-            node.optString("video_url").takeIf { it.isNotBlank() }
-                ?: node.optJSONObject("edge_sidecar_to_children")
-                    ?.optJSONArray("edges")?.optJSONObject(0)
-                    ?.optJSONObject("node")?.optString("video_url")
-        }.getOrNull()
+            val json = runCatching {
+                val connection = (
+                    URL("https://www.instagram.com/graphql/query")
+                        .openConnection() as HttpURLConnection
+                    ).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 6_000
+                    readTimeout = 10_000
+                    setRequestProperty("User-Agent", DESKTOP_UA)
+                    setRequestProperty("x-ig-app-id", IG_APP_ID)
+                    setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                    setRequestProperty("Accept", "*/*")
+                }
+                try {
+                    connection.outputStream.use { it.write(body.toByteArray()) }
+                    if (connection.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } finally {
+                    connection.disconnect()
+                }
+            }.getOrNull() ?: continue
 
-        return if (media.isNullOrBlank()) null else instagramResolved(media)
+            val media = runCatching {
+                val node = org.json.JSONObject(json)
+                    .optJSONObject("data")
+                    ?.optJSONObject("xdt_shortcode_media") ?: return@runCatching null
+                node.optString("video_url").takeIf { it.isNotBlank() }
+                    ?: node.optJSONObject("edge_sidecar_to_children")
+                        ?.optJSONArray("edges")?.optJSONObject(0)
+                        ?.optJSONObject("node")?.optString("video_url")
+            }.getOrNull()
+
+            if (!media.isNullOrBlank()) return instagramResolved(media)
+        }
+        return null
     }
 
     private fun instagramResolved(url: String) = Resolved(
