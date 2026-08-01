@@ -24,7 +24,7 @@ import tempfile
 import uuid
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 # A bundled ffmpeg so yt-dlp can always merge video+audio and make mp3s, even if
@@ -319,6 +319,9 @@ def diag():
         "asr_configured": bool(ASR_API_KEY),
         "asr_model": ASR_MODEL if ASR_API_KEY else None,
         "asr_endpoint": ASR_BASE_URL if ASR_API_KEY else None,
+        # Same story for TapCopy's AI Tools, which share the key.
+        "ai_configured": bool(AI_API_KEY),
+        "ai_model": AI_MODEL if AI_API_KEY else None,
     }
 
 
@@ -503,6 +506,138 @@ def transcribe(
         return {"text": _transcribe_file(source, workdir)}
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+# --- Text tools ------------------------------------------------------------
+# TapCopy's AI Tools call this endpoint instead of talking to a model directly,
+# so the API key lives here and never ships inside an APK where anyone could
+# pull it out. The same Groq key that powers transcription also serves chat
+# models, so turning transcription on turns these on too.
+AI_API_KEY = os.environ.get("AI_API_KEY") or ASR_API_KEY
+AI_BASE_URL = os.environ.get("AI_BASE_URL") or ASR_BASE_URL
+AI_MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
+
+AI_NOT_CONFIGURED = (
+    "AI Tools aren't switched on. Add an ASR_API_KEY (or AI_API_KEY) to the server."
+)
+
+# Long enough for a caption, a script or a couple of pages of notes; short
+# enough that one request can't run up a bill or time the phone out.
+AI_MAX_CHARS = 8000
+
+# The whole instruction for each tool. {option} is filled from the request when
+# the tool needs one (a language, a tone).
+AI_PROMPTS = {
+    "rewrite": (
+        "Rewrite the user's text so it is clearer and reads well. Keep the "
+        "meaning, the language it is written in, and roughly the same length."
+    ),
+    "shorten": (
+        "Shorten the user's text to its essential points. Keep the same "
+        "language and tone. Aim for half the length or less without losing "
+        "anything that matters."
+    ),
+    "translate": (
+        "Translate the user's text into {option}. Keep the tone, the line "
+        "breaks and any emoji. If it is already in {option}, return it "
+        "unchanged."
+    ),
+    "hook": (
+        "Rewrite the user's text with a strong opening line — the kind of "
+        "first line that stops someone scrolling on TikTok or Instagram. Keep "
+        "the rest of the message and the language it is written in."
+    ),
+    "tone": (
+        "Rewrite the user's text so it sounds {option}. Keep the meaning and "
+        "the language it is written in."
+    ),
+    "reword": (
+        "Reword the user's text so the wording is fresh while the meaning, "
+        "facts, language and length stay the same. Do not add or remove "
+        "information."
+    ),
+}
+
+AI_DEFAULT_OPTION = {"translate": "English", "tone": "professional"}
+
+AI_REPLY_RULE = (
+    " Reply with the finished text only — no preamble, no quotation marks, no "
+    "explanation, no notes about what you changed."
+)
+
+
+def _chat(system: str, user_text: str) -> str:
+    """Sends one prompt to the chat model and returns its reply."""
+    try:
+        import requests
+
+        reply = requests.post(
+            AI_BASE_URL.rstrip("/") + "/chat/completions",
+            headers={
+                "Authorization": f"Bearer {AI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": AI_MODEL,
+                "temperature": 0.4,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_text},
+                ],
+            },
+            timeout=120,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"AI service unreachable: {exc}")
+
+    if reply.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI service said {reply.status_code}: {reply.text[:200]}",
+        )
+    choices = (reply.json() or {}).get("choices") or []
+    out = ""
+    if choices:
+        out = (choices[0].get("message") or {}).get("content", "").strip()
+    if not out:
+        raise HTTPException(status_code=502, detail="The AI sent nothing back")
+    return out
+
+
+@app.post("/ai")
+def ai(payload: dict = Body(...)):
+    """
+    One text tool per call: {"tool": "rewrite", "text": "...", "option": ""}.
+
+    `option` carries the target language for translate and the tone for tone;
+    the other tools ignore it.
+    """
+    if not AI_API_KEY:
+        raise HTTPException(status_code=503, detail=AI_NOT_CONFIGURED)
+
+    tool = str(payload.get("tool", "")).strip().lower()
+    text = str(payload.get("text", "")).strip()
+    option = str(payload.get("option", "")).strip()
+
+    if tool not in AI_PROMPTS:
+        raise HTTPException(status_code=400, detail=f"Unknown tool: {tool or '(none)'}")
+    if not text:
+        raise HTTPException(status_code=400, detail="No text to work on")
+    if len(text) > AI_MAX_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"That's {len(text)} characters; {AI_MAX_CHARS} is the limit for one go.",
+        )
+
+    option = option or AI_DEFAULT_OPTION.get(tool, "")
+    system = AI_PROMPTS[tool].format(option=option) + AI_REPLY_RULE
+    return {"tool": tool, "result": _chat(system, text)}
+
+
+@app.get("/ai/tools")
+def ai_tools():
+    """What this server can do, so the app doesn't have to guess."""
+    return {"configured": bool(AI_API_KEY), "tools": sorted(AI_PROMPTS)}
 
 
 _HEIGHT_LIMIT = {"high": 10000, "medium": 720, "low": 480}
