@@ -395,14 +395,19 @@ def _transcribe_file(source_path: str, workdir: str) -> str:
     except Exception:  # noqa: BLE001
         raise HTTPException(status_code=502, detail="Couldn't read the audio track")
 
+    return _send_to_speech(audio)
+
+
+def _send_to_speech(audio_path: str) -> str:
+    """Hands an audio file to the speech model and returns the words."""
     try:
         import requests
 
-        with open(audio, "rb") as handle:
+        with open(audio_path, "rb") as handle:
             reply = requests.post(
                 ASR_BASE_URL.rstrip("/") + "/audio/transcriptions",
                 headers={"Authorization": f"Bearer {ASR_API_KEY}"},
-                files={"file": ("audio.mp3", handle, "audio/mpeg")},
+                files={"file": (os.path.basename(audio_path), handle, "application/octet-stream")},
                 data={"model": ASR_MODEL, "response_format": "json"},
                 timeout=300,
             )
@@ -421,7 +426,10 @@ def _transcribe_file(source_path: str, workdir: str) -> str:
 
 
 @app.post("/transcribe_upload")
-async def transcribe_upload(file: UploadFile = File(...)):
+async def transcribe_upload(
+    file: UploadFile = File(...),
+    already_audio: bool = Query(False, description="Skip ffmpeg; the upload is audio"),
+):
     """
     Transcribe media the phone sends us directly.
 
@@ -443,6 +451,12 @@ async def transcribe_upload(file: UploadFile = File(...)):
                 handle.write(chunk)
         if os.path.getsize(source) == 0:
             raise HTTPException(status_code=400, detail="Empty upload")
+        # The phone can strip the audio itself, which saves it a large upload and
+        # saves us a transcode.
+        if already_audio:
+            audio = os.path.join(workdir, "audio.m4a")
+            os.rename(source, audio)
+            return {"text": _send_to_speech(audio)}
         return {"text": _transcribe_file(source, workdir)}
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

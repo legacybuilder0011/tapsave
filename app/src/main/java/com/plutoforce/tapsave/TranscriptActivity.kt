@@ -80,7 +80,7 @@ class TranscriptActivity : Activity() {
                     // Keep the real reason: a generic message here hid what
                     // actually went wrong and made this impossible to diagnose.
                     text = runCatching {
-                        Transcriber.transcribe(Prefs.backend(this), media.url, url, media.headers)
+                        Transcriber.transcribe(this, Prefs.backend(this), media.url, url, media.headers)
                     }.getOrElse { error ->
                         failure = error.message
                         null

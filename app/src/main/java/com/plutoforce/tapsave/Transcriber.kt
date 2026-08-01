@@ -20,6 +20,7 @@ object Transcriber {
 
     /** Recognised words. Throws with the server's own explanation on failure. */
     fun transcribe(
+        context: android.content.Context,
         backendBase: String,
         mediaUrl: String,
         pageUrl: String,
@@ -33,7 +34,7 @@ object Transcriber {
         direct.getOrNull()?.let { return it }
 
         // 2. The CDN wouldn't serve the server; send the bytes ourselves.
-        return runCatching { viaUpload(base, mediaUrl, mediaHeaders) }
+        return runCatching { viaUpload(context, base, mediaUrl, mediaHeaders) }
             .getOrElse { uploadError ->
                 // Report whichever failure explains the most.
                 val first = direct.exceptionOrNull()?.message
@@ -57,10 +58,22 @@ object Transcriber {
 
     /** Streams the media through this phone and up to the server as multipart. */
     private fun viaUpload(
+        context: android.content.Context,
         base: String,
         mediaUrl: String,
         mediaHeaders: Map<String, String>
     ): String {
+        // Strip the audio here first: uploading the whole video is what made
+        // this slow, and the sound is all the speech model needs.
+        val audio = AudioExtractor.extract(context.cacheDir, mediaUrl, mediaHeaders)
+        if (audio != null) {
+            try {
+                return uploadFile(base, audio.inputStream(), "clip.m4a", alreadyAudio = true)
+            } finally {
+                audio.delete()
+            }
+        }
+
         val source = (URL(mediaUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 20_000
@@ -74,8 +87,23 @@ object Transcriber {
             throw IllegalStateException("Couldn't fetch the video to transcribe")
         }
 
+        try {
+            return uploadFile(base, source.inputStream, "clip.mp4", alreadyAudio = false)
+        } finally {
+            source.disconnect()
+        }
+    }
+
+    /** Sends one file to the server as multipart/form-data. */
+    private fun uploadFile(
+        base: String,
+        stream: java.io.InputStream,
+        filename: String,
+        alreadyAudio: Boolean
+    ): String {
         val boundary = "----TapSave" + System.currentTimeMillis()
-        val upload = (URL("$base/transcribe_upload").openConnection() as HttpURLConnection).apply {
+        val endpoint = "$base/transcribe_upload" + if (alreadyAudio) "?already_audio=1" else ""
+        val upload = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             doOutput = true
             connectTimeout = 20_000
@@ -84,27 +112,23 @@ object Transcriber {
             setChunkedStreamingMode(256 * 1024)
         }
 
-        try {
-            DataOutputStream(upload.outputStream).use { out ->
-                out.writeBytes("--$boundary\r\n")
-                out.writeBytes(
-                    "Content-Disposition: form-data; name=\"file\"; filename=\"clip.mp4\"\r\n"
-                )
-                out.writeBytes("Content-Type: application/octet-stream\r\n\r\n")
-                source.inputStream.use { input ->
-                    val buffer = ByteArray(256 * 1024)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        out.write(buffer, 0, read)
-                    }
+        DataOutputStream(upload.outputStream).use { out ->
+            out.writeBytes("--$boundary\r\n")
+            out.writeBytes(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"$filename\"\r\n"
+            )
+            out.writeBytes("Content-Type: application/octet-stream\r\n\r\n")
+            stream.use { input ->
+                val buffer = ByteArray(256 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    out.write(buffer, 0, read)
                 }
-                out.writeBytes("\r\n--$boundary--\r\n")
             }
-            return readTranscript(upload)
-        } finally {
-            source.disconnect()
+            out.writeBytes("\r\n--$boundary--\r\n")
         }
+        return readTranscript(upload)
     }
 
     private fun readTranscript(connection: HttpURLConnection): String {
