@@ -51,7 +51,7 @@ class TranscriptActivity : Activity() {
             status.text = getString(R.string.transcript_no_link)
             return
         }
-        if (!url.contains("tiktok.com", ignoreCase = true)) {
+        if (!VideoPageExtractor.canHandle(url)) {
             status.text = getString(R.string.transcript_unsupported)
             body.text = ""
             setActionsEnabled(false)
@@ -63,17 +63,37 @@ class TranscriptActivity : Activity() {
         setActionsEnabled(false)
 
         Thread {
-            val text = runCatching { VideoPageExtractor.transcript(url) }.getOrNull()
+            // Free and instant when the platform published captions.
+            var text = runCatching { VideoPageExtractor.transcript(url) }.getOrNull()
+            var listened = false
+
+            if (text.isNullOrBlank()) {
+                // No caption track — listen to the audio instead. The phone
+                // resolves the media (platforms refuse the server's IP), and the
+                // server fetches those bytes from the CDN and transcribes them.
+                handler.post { status.text = getString(R.string.transcript_listening) }
+                val media = runCatching { VideoPageExtractor.resolve(url) }.getOrNull()
+                if (media != null) {
+                    text = runCatching {
+                        Transcriber.fromMedia(Prefs.backend(this), media.url, url)
+                    }.getOrNull()
+                    listened = true
+                }
+            }
+
+            val result = text
             handler.post {
-                if (text.isNullOrBlank()) {
-                    status.text = getString(R.string.transcript_none)
+                if (result.isNullOrBlank()) {
+                    status.text = getString(
+                        if (listened) R.string.transcript_failed else R.string.transcript_none
+                    )
                     setActionsEnabled(false)
                 } else {
-                    transcript = text
-                    body.text = text
+                    transcript = result
+                    body.text = result
                     status.text = getString(
                         R.string.transcript_ready,
-                        text.split(Regex("\\s+")).count { it.isNotBlank() }
+                        result.split(Regex("\\s+")).count { it.isNotBlank() }
                     )
                     setActionsEnabled(true)
                 }

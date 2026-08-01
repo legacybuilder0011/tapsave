@@ -16,6 +16,7 @@ platform's Terms of Service and the creator's copyright.
 
 import glob
 import json
+import urllib.request
 import os
 import shutil
 import subprocess
@@ -356,6 +357,97 @@ def probe(url: str = Query(...)):
             if ("Downloading" in ln or "format" in ln.lower() or "Merg" in ln or "ERROR" in ln)
         )[-3000:]
     )
+
+
+# --- Speech-to-text --------------------------------------------------------
+# Set ASR_API_KEY in the host's environment to switch transcription on. Any
+# OpenAI-compatible audio endpoint works; Groq's is the default because its
+# free tier covers personal use and whisper-large-v3-turbo is quick.
+ASR_API_KEY = os.environ.get("ASR_API_KEY", "")
+ASR_BASE_URL = os.environ.get("ASR_BASE_URL", "https://api.groq.com/openai/v1")
+ASR_MODEL = os.environ.get("ASR_MODEL", "whisper-large-v3-turbo")
+
+ASR_NOT_CONFIGURED = (
+    "Transcription isn't switched on. Add an ASR_API_KEY to the server to enable it."
+)
+
+
+@app.get("/transcribe")
+def transcribe(
+    media: str = Query(..., description="Direct media URL (from /resolve or the phone)"),
+    referer: str = Query("", description="Page the media came from, for the CDN"),
+):
+    """
+    Speech-to-text for a video the caller has already resolved.
+
+    The caller passes a direct CDN link rather than a page URL: TikTok and
+    Instagram refuse this server's datacenter IP for their APIs, but their CDNs
+    serve the file to anyone, so the phone resolves the link and we only fetch
+    bytes. Audio is stripped out here and sent to the speech provider.
+    """
+    if not ASR_API_KEY:
+        raise HTTPException(status_code=503, detail=ASR_NOT_CONFIGURED)
+    if not media.startswith("http"):
+        raise HTTPException(status_code=400, detail="media must be an http(s) URL")
+    if not FFMPEG_LOCATION:
+        raise HTTPException(status_code=503, detail="No ffmpeg available to extract audio")
+
+    workdir = tempfile.mkdtemp(prefix="tapsave_asr_")
+    try:
+        source = os.path.join(workdir, "source")
+        request = urllib.request.Request(
+            media,
+            headers={
+                "User-Agent": MOBILE_UA,
+                "Referer": referer or "https://www.tiktok.com/",
+                "Accept": "*/*",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response, \
+                    open(source, "wb") as handle:
+                shutil.copyfileobj(response, handle, 1024 * 256)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Couldn't fetch the media: {exc}")
+
+        # Mono 16 kHz is what speech models want, and keeps the upload small.
+        audio = os.path.join(workdir, "audio.mp3")
+        try:
+            subprocess.run(
+                [
+                    FFMPEG_LOCATION, "-y", "-i", source, "-vn",
+                    "-ac", "1", "-ar", "16000", "-b:a", "64k", audio,
+                ],
+                check=True, capture_output=True, timeout=300,
+            )
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail="Couldn't read the audio track")
+
+        try:
+            import requests
+
+            with open(audio, "rb") as handle:
+                reply = requests.post(
+                    ASR_BASE_URL.rstrip("/") + "/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {ASR_API_KEY}"},
+                    files={"file": ("audio.mp3", handle, "audio/mpeg")},
+                    data={"model": ASR_MODEL, "response_format": "json"},
+                    timeout=300,
+                )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Speech service unreachable: {exc}")
+
+        if reply.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Speech service said {reply.status_code}: {reply.text[:200]}",
+            )
+        text = (reply.json() or {}).get("text", "").strip()
+        if not text:
+            raise HTTPException(status_code=502, detail="Nothing was recognised in that audio")
+        return {"text": text}
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 _HEIGHT_LIMIT = {"high": 10000, "medium": 720, "low": 480}
