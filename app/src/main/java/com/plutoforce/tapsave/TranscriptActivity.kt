@@ -104,7 +104,7 @@ class TranscriptActivity : Activity() {
         startActivity(Intent.createChooser(intent, getString(R.string.transcript_share)))
     }
 
-    /** Writes the transcript next to the videos, as Documents/TapSave/*.txt. */
+    /** Writes the transcript as a text file in Documents/TapSave. */
     private fun saveAsText() {
         val name = "TapSave_transcript_${System.currentTimeMillis()}.txt"
         val values = ContentValues().apply {
