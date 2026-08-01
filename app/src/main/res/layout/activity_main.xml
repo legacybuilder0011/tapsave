@@ -165,6 +165,23 @@
             <!-- More -->
             <LinearLayout style="@style/Card">
 
+                <LinearLayout android:id="@+id/rowTranscript" style="@style/Row">
+                    <ImageView style="@style/RowIcon" android:src="@drawable/ic_transcript" />
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+                        <TextView style="@style/RowTitle" android:text="@string/transcript_row" />
+                        <TextView style="@style/RowSub" android:text="@string/transcript_row_sub" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/card_stroke" />
+
                 <LinearLayout android:id="@+id/rowHistory" style="@style/Row">
                     <ImageView style="@style/RowIcon" android:src="@drawable/ic_history" />
                     <LinearLayout

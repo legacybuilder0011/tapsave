@@ -55,4 +55,21 @@
     <string name="status_saved_one">Saved to Gallery (TapSave)</string>
     <string name="status_save_failed">Couldn\'t save that one</string>
     <string name="status_open_failed">Couldn\'t open that status</string>
+
+    <!-- Transcript -->
+    <string name="transcript_title">Transcript</string>
+    <string name="transcript_row">Video transcript</string>
+    <string name="transcript_row_sub">Get the spoken words from a TikTok</string>
+    <string name="transcript_fetch">Get transcript from copied link</string>
+    <string name="transcript_copy">Copy</string>
+    <string name="transcript_share">Share</string>
+    <string name="transcript_save">Save .txt</string>
+    <string name="transcript_working">Reading the captions\u2026</string>
+    <string name="transcript_ready">%1$d words \u00b7 tap and hold to select part of it</string>
+    <string name="transcript_no_link">Copy a TikTok link first, then tap the button below.</string>
+    <string name="transcript_unsupported">Only TikTok for now. TikTok publishes captions for its videos; Instagram doesn\'t, so its transcripts would need speech recognition.</string>
+    <string name="transcript_none">No captions on that video. TikTok only publishes them when the creator turned captions on.</string>
+    <string name="transcript_copied">Transcript copied</string>
+    <string name="transcript_saved">Saved to Documents/TapSave</string>
+    <string name="transcript_save_failed">Couldn\'t save the file</string>
 </resources>

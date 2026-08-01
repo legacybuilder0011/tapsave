@@ -55,6 +55,10 @@
             android:name=".StatusActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".TranscriptActivity"
+            android:exported="false" />
+
         <!-- Quick "which status?" sheet shown over WhatsApp; its own task so
              dismissing returns the user to WhatsApp, not to TapSave. -->
         <activity

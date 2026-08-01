@@ -56,6 +56,9 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.tileDownload).setOnClickListener { showHowTo() }
         findViewById<View>(R.id.tileStatus).setOnClickListener { openStatus() }
 
+        findViewById<View>(R.id.rowTranscript).setOnClickListener {
+            startActivity(Intent(this, TranscriptActivity::class.java))
+        }
         findViewById<View>(R.id.rowHistory).setOnClickListener { openDownloads() }
         findViewById<View>(R.id.rowUpdate).setOnClickListener { checkForUpdate(true) }
         findViewById<View>(R.id.rowHowto).setOnClickListener { showHowTo() }

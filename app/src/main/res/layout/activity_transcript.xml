@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:id="@+id/backButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:padding="8dp"
+            android:src="@drawable/ic_back"
+            android:tint="@color/ink"
+            android:contentDescription="@string/nav_home" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:text="@string/transcript_title"
+            android:textColor="@color/ink"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/transcriptStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textColor="@color/muted"
+        android:textSize="13sp" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="12dp"
+        android:layout_weight="1"
+        android:background="@drawable/card_background"
+        android:scrollbars="none">
+
+        <TextView
+            android:id="@+id/transcriptText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:lineSpacingExtra="5dp"
+            android:textColor="@color/ink"
+            android:textIsSelectable="true"
+            android:textSize="16sp" />
+    </ScrollView>
+
+    <TextView
+        android:id="@+id/fetchButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/button_primary"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:text="@string/transcript_fetch"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/copyButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/button_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/transcript_copy"
+            android:textColor="@color/ink"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/shareButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/button_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/transcript_share"
+            android:textColor="@color/ink"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/saveButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/button_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/transcript_save"
+            android:textColor="@color/ink"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+</LinearLayout>

@@ -254,6 +254,76 @@ object VideoPageExtractor {
             }
         }.getOrNull()
 
+    // --- Transcripts -------------------------------------------------------
+
+    private val CAPTION_PATTERNS = listOf(
+        Regex("\"captionInfos\"\\s*:\\s*\\[.{0,600}?\"[uU]rl\"\\s*:\\s*\"([^\"]{20,})\"",
+            RegexOption.DOT_MATCHES_ALL),
+        Regex("\"subtitleInfos\"\\s*:\\s*\\[.{0,600}?\"UrlList\"\\s*:\\s*\\[\\s*\"([^\"]{20,})\"",
+            RegexOption.DOT_MATCHES_ALL),
+        Regex("\"claInfo\".{0,800}?\"[uU]rl\"\\s*:\\s*\"([^\"]{20,})\"",
+            RegexOption.DOT_MATCHES_ALL)
+    )
+
+    /**
+     * The spoken transcript, from the platform's own auto-captions.
+     *
+     * TikTok generates captions for most videos and links the subtitle file in
+     * the same page we already read for the video, so this costs nothing and
+     * needs no speech recognition. Instagram publishes no equivalent, so it
+     * returns null there and the caller explains why.
+     */
+    fun transcript(pageUrl: String, budgetMs: Int = 20_000): String? {
+        if (!pageUrl.contains("tiktok.com", ignoreCase = true)) return null
+        val deadline = System.currentTimeMillis() + budgetMs
+        fun left() = (deadline - System.currentTimeMillis()).toInt()
+
+        val page = fetch(pageUrl, left()) ?: return null
+        val captionUrl = findCaptionUrl(page.html) ?: return null
+        if (left() < MIN_ATTEMPT_MS) return null
+
+        val subtitles = httpGet(
+            captionUrl,
+            left(),
+            mapOf("User-Agent" to UA, "Referer" to page.url, "Accept" to "*/*")
+        ) ?: return null
+        return subtitlesToText(subtitles).takeIf { it.isNotBlank() }
+    }
+
+    private fun findCaptionUrl(html: String): String? {
+        val sources = listOf(html, html.replace("\\\"", "\"").replace("\\/", "/"))
+        for (source in sources) {
+            for (pattern in CAPTION_PATTERNS) {
+                val match = pattern.find(source) ?: continue
+                val url = unescape(match.groupValues[1])
+                if (url.startsWith("http")) return url
+            }
+        }
+        return null
+    }
+
+    /** Turns WebVTT / SRT into readable prose. */
+    private fun subtitlesToText(raw: String): String {
+        val lines = ArrayList<String>()
+        for (line in raw.lines()) {
+            val text = line.trim()
+            when {
+                text.isBlank() -> continue
+                text.startsWith("WEBVTT") -> continue
+                text.contains("-->") -> continue
+                // Cue numbers in SRT, and stray positioning data.
+                text.all { it.isDigit() } -> continue
+                text.startsWith("NOTE ") || text.startsWith("STYLE") -> continue
+                else -> {
+                    val clean = text.replace(Regex("<[^>]+>"), "").trim()
+                    // Captions repeat lines as they scroll; keep it readable.
+                    if (clean.isNotBlank() && clean != lines.lastOrNull()) lines.add(clean)
+                }
+            }
+        }
+        return lines.joinToString(" ").replace(Regex("\\s{2,}"), " ").trim()
+    }
+
     private data class Page(val url: String, val html: String, val cookies: String)
 
     private fun fetch(pageUrl: String, budgetMs: Int): Page? {
