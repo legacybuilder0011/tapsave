@@ -1,6 +1,7 @@
 package com.plutoforce.tapsave
 
 import org.json.JSONObject
+import java.io.DataOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -8,18 +9,39 @@ import java.net.URLEncoder
 /**
  * Speech-to-text for videos that carry no caption track.
  *
- * The phone resolves the media link (TikTok and Instagram refuse the server's
- * datacenter IP), then hands that CDN link to the backend, which fetches the
- * bytes, strips the audio and runs it through a speech model. Doing the
- * recognition server-side keeps the API key off the phone.
+ * Two routes, cheapest first. Normally the phone resolves the media link and the
+ * server fetches those bytes itself. But TikTok and Instagram hand out CDN links
+ * tied to the address that asked for them, so a link resolved on the phone is
+ * often refused for the server — in that case the phone downloads the file and
+ * uploads it instead. Recognition stays server-side either way, which keeps the
+ * API key off the phone.
  */
 object Transcriber {
 
-    /** Returns the recognised words, or throws with the server's explanation. */
-    fun fromMedia(backendBase: String, mediaUrl: String, pageUrl: String): String? {
+    /** Recognised words. Throws with the server's own explanation on failure. */
+    fun transcribe(
+        backendBase: String,
+        mediaUrl: String,
+        pageUrl: String,
+        mediaHeaders: Map<String, String>
+    ): String {
         val base = backendBase.trim().trimEnd('/')
-        if (base.isEmpty()) return null
+        require(base.isNotEmpty()) { "No server address set" }
 
+        // 1. Let the server fetch it — no upload, no mobile data.
+        val direct = runCatching { viaServerFetch(base, mediaUrl, pageUrl) }
+        direct.getOrNull()?.let { return it }
+
+        // 2. The CDN wouldn't serve the server; send the bytes ourselves.
+        return runCatching { viaUpload(base, mediaUrl, mediaHeaders) }
+            .getOrElse { uploadError ->
+                // Report whichever failure explains the most.
+                val first = direct.exceptionOrNull()?.message
+                throw IllegalStateException(uploadError.message ?: first ?: "Transcription failed")
+            }
+    }
+
+    private fun viaServerFetch(base: String, mediaUrl: String, pageUrl: String): String {
         val endpoint = base + "/transcribe?media=" +
             URLEncoder.encode(mediaUrl, "UTF-8") +
             "&referer=" + URLEncoder.encode(pageUrl, "UTF-8")
@@ -27,20 +49,78 @@ object Transcriber {
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 20_000
-            // Recognition takes a while on a long video, and the free host may
-            // be waking up as well.
+            // Recognition takes a while, and a sleeping free host wakes slowly.
             readTimeout = 300_000
         }
+        return readTranscript(connection)
+    }
+
+    /** Streams the media through this phone and up to the server as multipart. */
+    private fun viaUpload(
+        base: String,
+        mediaUrl: String,
+        mediaHeaders: Map<String, String>
+    ): String {
+        val source = (URL(mediaUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 20_000
+            readTimeout = 120_000
+            instanceFollowRedirects = true
+            mediaHeaders.forEach { (key, value) -> runCatching { setRequestProperty(key, value) } }
+        }
+        val code = source.responseCode
+        if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
+            source.disconnect()
+            throw IllegalStateException("Couldn't fetch the video to transcribe")
+        }
+
+        val boundary = "----TapSave" + System.currentTimeMillis()
+        val upload = (URL("$base/transcribe_upload").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 20_000
+            readTimeout = 300_000
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            setChunkedStreamingMode(256 * 1024)
+        }
+
+        try {
+            DataOutputStream(upload.outputStream).use { out ->
+                out.writeBytes("--$boundary\r\n")
+                out.writeBytes(
+                    "Content-Disposition: form-data; name=\"file\"; filename=\"clip.mp4\"\r\n"
+                )
+                out.writeBytes("Content-Type: application/octet-stream\r\n\r\n")
+                source.inputStream.use { input ->
+                    val buffer = ByteArray(256 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        out.write(buffer, 0, read)
+                    }
+                }
+                out.writeBytes("\r\n--$boundary--\r\n")
+            }
+            return readTranscript(upload)
+        } finally {
+            source.disconnect()
+        }
+    }
+
+    private fun readTranscript(connection: HttpURLConnection): String {
         try {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
                 val raw = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                 val detail = runCatching { JSONObject(raw).optString("detail") }.getOrNull()
                 throw IllegalStateException(
-                    detail?.takeIf { it.isNotBlank() } ?: "Transcription failed"
+                    detail?.takeIf { it.isNotBlank() }
+                        ?: "Server error ${connection.responseCode}"
                 )
             }
             val body = connection.inputStream.bufferedReader().use { it.readText() }
-            return JSONObject(body).optString("text").takeIf { it.isNotBlank() }
+            val text = JSONObject(body).optString("text")
+            if (text.isBlank()) throw IllegalStateException("The transcript came back empty")
+            return text
         } finally {
             connection.disconnect()
         }

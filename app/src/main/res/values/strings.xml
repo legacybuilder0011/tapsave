@@ -68,6 +68,7 @@
     <string name="transcript_ready">%1$d words \u00b7 tap and hold to select part of it</string>
     <string name="transcript_no_link">Copy a video link first, then tap the button below.</string>
     <string name="transcript_unsupported">That link isn\'t one TapSave can transcribe.</string>
+    <string name="transcript_no_media">Couldn\'t get the video\'s audio to transcribe.</string>
     <string name="transcript_listening">No captions — listening to the audio… this takes a moment.</string>
     <string name="transcript_failed">Couldn\'t transcribe that one. If the server says transcription isn\'t switched on, an ASR key needs adding to it.</string>
     <string name="transcript_none">No captions on that video. TikTok only publishes them when the creator turned captions on.</string>

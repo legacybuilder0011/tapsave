@@ -24,7 +24,7 @@ import tempfile
 import uuid
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 # A bundled ffmpeg so yt-dlp can always merge video+audio and make mp3s, even if
@@ -377,6 +377,77 @@ ASR_NOT_CONFIGURED = (
 )
 
 
+def _transcribe_file(source_path: str, workdir: str) -> str:
+    """Strips the audio and sends it to the speech model. Returns the words."""
+    if not FFMPEG_LOCATION:
+        raise HTTPException(status_code=503, detail="No ffmpeg available to extract audio")
+
+    # Mono 16 kHz is what speech models want, and keeps the upload small.
+    audio = os.path.join(workdir, "audio.mp3")
+    try:
+        subprocess.run(
+            [
+                FFMPEG_LOCATION, "-y", "-i", source_path, "-vn",
+                "-ac", "1", "-ar", "16000", "-b:a", "64k", audio,
+            ],
+            check=True, capture_output=True, timeout=300,
+        )
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail="Couldn't read the audio track")
+
+    try:
+        import requests
+
+        with open(audio, "rb") as handle:
+            reply = requests.post(
+                ASR_BASE_URL.rstrip("/") + "/audio/transcriptions",
+                headers={"Authorization": f"Bearer {ASR_API_KEY}"},
+                files={"file": ("audio.mp3", handle, "audio/mpeg")},
+                data={"model": ASR_MODEL, "response_format": "json"},
+                timeout=300,
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Speech service unreachable: {exc}")
+
+    if reply.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Speech service said {reply.status_code}: {reply.text[:200]}",
+        )
+    text = (reply.json() or {}).get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=502, detail="Nothing was recognised in that audio")
+    return text
+
+
+@app.post("/transcribe_upload")
+async def transcribe_upload(file: UploadFile = File(...)):
+    """
+    Transcribe media the phone sends us directly.
+
+    TikTok and Instagram hand out CDN links that are tied to the address that
+    asked for them, so a link the phone resolved often refuses this server. When
+    that happens the phone uploads the file instead and we work from the bytes.
+    """
+    if not ASR_API_KEY:
+        raise HTTPException(status_code=503, detail=ASR_NOT_CONFIGURED)
+
+    workdir = tempfile.mkdtemp(prefix="tapsave_up_")
+    try:
+        source = os.path.join(workdir, "upload")
+        with open(source, "wb") as handle:
+            while True:
+                chunk = await file.read(1024 * 256)
+                if not chunk:
+                    break
+                handle.write(chunk)
+        if os.path.getsize(source) == 0:
+            raise HTTPException(status_code=400, detail="Empty upload")
+        return {"text": _transcribe_file(source, workdir)}
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 @app.get("/transcribe")
 def transcribe(
     media: str = Query(..., description="Direct media URL (from /resolve or the phone)"),
@@ -415,42 +486,7 @@ def transcribe(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"Couldn't fetch the media: {exc}")
 
-        # Mono 16 kHz is what speech models want, and keeps the upload small.
-        audio = os.path.join(workdir, "audio.mp3")
-        try:
-            subprocess.run(
-                [
-                    FFMPEG_LOCATION, "-y", "-i", source, "-vn",
-                    "-ac", "1", "-ar", "16000", "-b:a", "64k", audio,
-                ],
-                check=True, capture_output=True, timeout=300,
-            )
-        except Exception:  # noqa: BLE001
-            raise HTTPException(status_code=502, detail="Couldn't read the audio track")
-
-        try:
-            import requests
-
-            with open(audio, "rb") as handle:
-                reply = requests.post(
-                    ASR_BASE_URL.rstrip("/") + "/audio/transcriptions",
-                    headers={"Authorization": f"Bearer {ASR_API_KEY}"},
-                    files={"file": ("audio.mp3", handle, "audio/mpeg")},
-                    data={"model": ASR_MODEL, "response_format": "json"},
-                    timeout=300,
-                )
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=502, detail=f"Speech service unreachable: {exc}")
-
-        if reply.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Speech service said {reply.status_code}: {reply.text[:200]}",
-            )
-        text = (reply.json() or {}).get("text", "").strip()
-        if not text:
-            raise HTTPException(status_code=502, detail="Nothing was recognised in that audio")
-        return {"text": text}
+        return {"text": _transcribe_file(source, workdir)}
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

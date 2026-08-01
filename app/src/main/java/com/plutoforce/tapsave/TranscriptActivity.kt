@@ -67,26 +67,36 @@ class TranscriptActivity : Activity() {
             var text = runCatching { VideoPageExtractor.transcript(url) }.getOrNull()
             var listened = false
 
+            var failure: String? = null
+
             if (text.isNullOrBlank()) {
-                // No caption track — listen to the audio instead. The phone
-                // resolves the media (platforms refuse the server's IP), and the
-                // server fetches those bytes from the CDN and transcribes them.
+                // No caption track — listen to the audio instead.
                 handler.post { status.text = getString(R.string.transcript_listening) }
+                listened = true
                 val media = runCatching { VideoPageExtractor.resolve(url) }.getOrNull()
-                if (media != null) {
+                if (media == null) {
+                    failure = getString(R.string.transcript_no_media)
+                } else {
+                    // Keep the real reason: a generic message here hid what
+                    // actually went wrong and made this impossible to diagnose.
                     text = runCatching {
-                        Transcriber.fromMedia(Prefs.backend(this), media.url, url)
-                    }.getOrNull()
-                    listened = true
+                        Transcriber.transcribe(Prefs.backend(this), media.url, url, media.headers)
+                    }.getOrElse { error ->
+                        failure = error.message
+                        null
+                    }
                 }
             }
 
             val result = text
+            val reason = failure
             handler.post {
                 if (result.isNullOrBlank()) {
-                    status.text = getString(
-                        if (listened) R.string.transcript_failed else R.string.transcript_none
-                    )
+                    status.text = when {
+                        !reason.isNullOrBlank() -> reason
+                        listened -> getString(R.string.transcript_failed)
+                        else -> getString(R.string.transcript_none)
+                    }
                     setActionsEnabled(false)
                 } else {
                     transcript = result
