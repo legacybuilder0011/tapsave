@@ -73,7 +73,10 @@ class TranscriptActivity : Activity() {
                 // No caption track — listen to the audio instead.
                 handler.post { status.text = getString(R.string.transcript_listening) }
                 listened = true
-                val media = runCatching { VideoPageExtractor.resolve(url) }.getOrNull()
+                // Only the audio matters here, so take the smallest rendition.
+                val media = runCatching {
+                    VideoPageExtractor.resolve(url, quality = "low")
+                }.getOrNull()
                 if (media == null) {
                     failure = getString(R.string.transcript_no_media)
                 } else {

@@ -81,7 +81,11 @@ object VideoDownloader {
             if (VideoPageExtractor.canHandle(videoUrl)) {
                 val onDevice = runCatching {
                     // Bounded so a platform that won't answer can't eat the budget.
-                    VideoPageExtractor.resolve(videoUrl, remaining(deadline).coerceAtMost(26_000))
+                    VideoPageExtractor.resolve(
+                        videoUrl,
+                        remaining(deadline).coerceAtMost(26_000),
+                        quality
+                    )
                 }.getOrNull()
                 if (onDevice != null) {
                     val saved = runCatching {

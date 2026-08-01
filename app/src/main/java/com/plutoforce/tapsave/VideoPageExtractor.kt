@@ -57,20 +57,28 @@ object VideoPageExtractor {
      * each waited out their own timeout in turn and the button sat there
      * counting for the better part of a minute before giving up.
      */
-    fun resolve(pageUrl: String, budgetMs: Int = 20_000): Resolved? {
+    fun resolve(
+        pageUrl: String,
+        budgetMs: Int = 20_000,
+        quality: String = "high"
+    ): Resolved? {
         val deadline = System.currentTimeMillis() + budgetMs
         fun left() = (deadline - System.currentTimeMillis()).toInt()
 
         // Instagram answers logged-out requests from a phone IP through its own
         // endpoints — far more reliable than scraping a page behind a login wall.
         if (isInstagram(pageUrl)) {
-            if (left() > MIN_ATTEMPT_MS) instagramViaApi(pageUrl, left())?.let { return it }
+            if (left() > MIN_ATTEMPT_MS) instagramViaApi(pageUrl, left(), quality)?.let { return it }
             if (left() > MIN_ATTEMPT_MS) instagramViaGraphql(pageUrl, left())?.let { return it }
         }
         for (candidate in candidatePages(pageUrl)) {
             if (left() < MIN_ATTEMPT_MS) break
             val page = fetch(candidate, left()) ?: continue
-            val media = findMediaUrl(page.html) ?: continue
+            // TikTok lists several renditions; "playAddr" is only its default
+            // and is often not the best one, which is why High looked soft.
+            val media = tiktokByQuality(page.html, quality)
+                ?: findMediaUrl(page.html)
+                ?: continue
 
             val headers = HashMap<String, String>()
             headers["User-Agent"] = UA
@@ -144,7 +152,7 @@ object VideoPageExtractor {
      * with an Instagram app user-agent is what actually serves public posts, and
      * is how working downloaders reach it. Both are tried, cheapest first.
      */
-    private fun instagramViaApi(pageUrl: String, budgetMs: Int): Resolved? {
+    private fun instagramViaApi(pageUrl: String, budgetMs: Int, quality: String): Resolved? {
         val mediaId = shortcodeOf(pageUrl)?.let { shortcodeToMediaId(it) } ?: return null
         val attempts = listOf(
             "https://i.instagram.com/api/v1/media/$mediaId/info/" to IG_APP_UA,
@@ -162,17 +170,32 @@ object VideoPageExtractor {
                     "Referer" to "https://www.instagram.com/"
                 )
             ) ?: continue
-            videoFromApiJson(json)?.let { return instagramResolved(it) }
+            videoFromApiJson(json, heightLimit(quality))?.let { return instagramResolved(it) }
         }
         return null
     }
 
-    private fun videoFromApiJson(json: String): String? = runCatching {
+    private fun videoFromApiJson(json: String, limit: Int): String? = runCatching {
         val items = org.json.JSONObject(json).optJSONArray("items") ?: return@runCatching null
         val item = items.optJSONObject(0) ?: return@runCatching null
         // A carousel keeps its videos one level down.
         val holder = item.optJSONArray("carousel_media")?.optJSONObject(0) ?: item
-        holder.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url")
+        val versions = holder.optJSONArray("video_versions") ?: return@runCatching null
+
+        // Instagram lists renditions largest first; take the biggest that fits.
+        var best: String? = null
+        var bestHeight = -1
+        for (i in 0 until versions.length()) {
+            val version = versions.optJSONObject(i) ?: continue
+            val url = version.optString("url")
+            if (url.isBlank()) continue
+            val height = version.optInt("height", 0)
+            if (height in 1..limit && height > bestHeight) {
+                bestHeight = height
+                best = url
+            }
+        }
+        best ?: versions.optJSONObject(0)?.optString("url")
     }.getOrNull()?.takeIf { it.isNotBlank() }
 
     /**
@@ -395,6 +418,48 @@ object VideoPageExtractor {
         // Last resort: a direct mp4 on a known media CDN (Pinterest, Instagram).
         Regex("https?://[^\"'\\s\\\\]*(?:pinimg|cdninstagram|fbcdn)[^\"'\\s\\\\]*\\.mp4[^\"'\\s\\\\]*")
     )
+
+    private fun heightLimit(quality: String) = when (quality) {
+        "medium" -> 720
+        "low" -> 480
+        else -> 100000
+    }
+
+    /**
+     * Picks a TikTok rendition to match the chosen quality.
+     *
+     * TikTok publishes each video at several bitrates in "bitrateInfo", each
+     * with its own URL, while the plain "playAddr" is just the default — often
+     * a middling one. High now means the best available, not whatever TikTok
+     * happened to point at.
+     */
+    private fun tiktokByQuality(html: String, quality: String): String? {
+        val limit = heightLimit(quality)
+        val sources = listOf(html, html.replace("\\\"", "\"").replace("\\/", "/"))
+        val pattern = Regex(
+            "\"Bitrate\"\\s*:\\s*(\\d+)(.{0,800}?)\"UrlList\"\\s*:\\s*\\[\\s*\"([^\"]{20,})\"",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val gear = Regex("\"GearName\"\\s*:\\s*\"[^\"]*?(\\d{3,4})")
+
+        for (source in sources) {
+            val options = ArrayList<Triple<Int, Int, String>>()
+            for (match in pattern.findAll(source)) {
+                val bitrate = match.groupValues[1].toIntOrNull() ?: continue
+                val url = unescape(match.groupValues[3])
+                if (!url.startsWith("http")) continue
+                val height = gear.find(match.groupValues[2])
+                    ?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                options.add(Triple(bitrate, height, url))
+            }
+            if (options.isEmpty()) continue
+            // Unknown heights stay in the running rather than being discarded.
+            val eligible = options.filter { it.second == 0 || it.second <= limit }
+                .ifEmpty { options }
+            eligible.maxByOrNull { it.first }?.let { return it.third }
+        }
+        return null
+    }
 
     private fun findMediaUrl(html: String): String? {
         // Instagram's embed page carries its JSON inside a string, so the source
