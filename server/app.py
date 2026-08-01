@@ -314,6 +314,11 @@ def diag():
         "cookies_present": present,
         "cookies_path": COOKIES_FILE,
         "cookies_bytes": os.path.getsize(COOKIES_FILE) if present else 0,
+        # So the app (and a browser) can confirm transcription is switched on
+        # without exposing the key itself.
+        "asr_configured": bool(ASR_API_KEY),
+        "asr_model": ASR_MODEL if ASR_API_KEY else None,
+        "asr_endpoint": ASR_BASE_URL if ASR_API_KEY else None,
     }
 
 
