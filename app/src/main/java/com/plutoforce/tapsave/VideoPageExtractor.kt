@@ -23,7 +23,13 @@ object VideoPageExtractor {
     data class Resolved(val url: String, val headers: Map<String, String>)
 
     /** One downloadable piece of a post — a video, or a slide from a carousel. */
-    data class Media(val url: String, val isVideo: Boolean, val headers: Map<String, String>)
+    data class Media(
+        val url: String,
+        val isVideo: Boolean,
+        val headers: Map<String, String>,
+        /** True when this is all Instagram would serve, not the whole post. */
+        val partial: Boolean = false
+    )
 
     /**
      * Why the last attempt found nothing — shown to the user when everything
@@ -137,6 +143,11 @@ object VideoPageExtractor {
                 ?: findMediaUrl(page.html)
                 ?: continue
             return listOf(Media(media, true, headers))
+        }
+        // Everything else refused us; the share picture is still worth having.
+        if (isInstagram(pageUrl)) {
+            val preview = instagramPreview(pageUrl)
+            if (preview.isNotEmpty()) return preview
         }
         if (lastReason.isBlank()) lastReason = "nothing downloadable on the page"
         return emptyList()
@@ -409,12 +420,44 @@ object VideoPageExtractor {
             .toList()
         if (videos.isNotEmpty()) return videos.map { Media(it, true, headers) }
 
-        return IG_DISPLAY_URL.findAll(text)
+        val displayed = IG_DISPLAY_URL.findAll(text)
             .map { unescape(it.groupValues[1]) }
             .filter { it.startsWith("http") }
             .distinctBy { it.substringBefore("?") }
-            .map { Media(it, false, headers) }
             .toList()
+        if (displayed.isNotEmpty()) return displayed.map { Media(it, false, headers) }
+
+        // The share preview. One slide of a carousel, but a real picture and
+        // better than sending the user away with nothing.
+        val preview = OG_IMAGE.find(text)?.groupValues?.get(1)?.let { unescape(it) }
+        if (preview != null && preview.startsWith("http")) {
+            note("Instagram only served the first slide")
+            return listOf(Media(preview, false, headers, partial = true))
+        }
+        return emptyList()
+    }
+
+    private val OG_IMAGE =
+        Regex("property=\"og:image\"[^>]{0,80}content=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+
+    /**
+     * Instagram's own image redirect for a public post.
+     *
+     * /p/{code}/media/?size=l answers a logged-out request with the picture
+     * itself, which makes it the one route that still works when the API and the
+     * post query both refuse us. It only ever gives the first slide.
+     */
+    private fun instagramPreview(pageUrl: String): List<Media> {
+        val code = shortcodeOf(pageUrl) ?: return emptyList()
+        note("Instagram only served the first slide")
+        return listOf(
+            Media(
+                "https://www.instagram.com/p/$code/media/?size=l",
+                isVideo = false,
+                headers = IG_HEADERS,
+                partial = true
+            )
+        )
     }
 
     private fun note(reason: String) {

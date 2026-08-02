@@ -109,7 +109,16 @@ object VideoDownloader {
                             onProgress = onProgress
                         )
                     }.getOrNull()
-                    if (saved != null && saved.ok) return saved
+                    if (saved != null && saved.ok) {
+                        return if (onDevice.partial) {
+                            saved.copy(
+                                message = saved.message +
+                                    " — only the first slide; Instagram wouldn't give up the rest"
+                            )
+                        } else {
+                            saved
+                        }
+                    }
                 }
             }
 
