@@ -551,6 +551,19 @@ AI_PROMPTS = {
         "Rewrite the user's text so it sounds {option}. Keep the meaning and "
         "the language it is written in."
     ),
+    "cleanup": (
+        "The user's text was read off a phone screen by OCR, so it is rough: "
+        "words are misread, sentences are split across lines, the same passage "
+        "may appear twice from two screenshots of one post, and bits of the "
+        "interface (clock, battery, view counts, buttons like Search or Add "
+        "comment) are mixed in. Give back the text as it actually reads on "
+        "screen: fix the obvious misreadings, join lines that belong to one "
+        "sentence, drop the repeated passages and the interface leftovers. Keep "
+        "the original wording, language, emoji, hashtags and the line breaks "
+        "that are part of the message — numbered steps stay on their own lines. "
+        "Never invent anything that isn't there; if a word is too mangled to "
+        "recover, leave it as it is."
+    ),
     "reword": (
         "Reword the user's text so the wording is fresh while the meaning, "
         "facts, language and length stay the same. Do not add or remove "
