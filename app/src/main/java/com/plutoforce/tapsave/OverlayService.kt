@@ -161,7 +161,12 @@ class OverlayService : Service() {
                     // front meant a failed attempt could never be retried — the
                     // next tap treated the link as already handled.
                     Prefs.setLastDownloadedUrl(this, url)
-                    if (result.uri != null && result.name != null) {
+                    if (result.parts.isNotEmpty()) {
+                        // A carousel: every slide belongs in the list.
+                        result.parts.forEach { part ->
+                            DownloadStore.add(this, part.name, url, part.uri, part.audio)
+                        }
+                    } else if (result.uri != null && result.name != null) {
                         DownloadStore.add(this, result.name, url, result.uri, result.audio)
                     }
                     showSuccessThenIdle()

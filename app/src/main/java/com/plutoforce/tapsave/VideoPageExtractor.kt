@@ -22,6 +22,9 @@ object VideoPageExtractor {
 
     data class Resolved(val url: String, val headers: Map<String, String>)
 
+    /** One downloadable piece of a post — a video, or a slide from a carousel. */
+    data class Media(val url: String, val isVideo: Boolean, val headers: Map<String, String>)
+
     private const val UA =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 " +
             "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
@@ -62,23 +65,43 @@ object VideoPageExtractor {
         budgetMs: Int = 20_000,
         quality: String = "high"
     ): Resolved? {
+        val items = resolveAll(pageUrl, budgetMs, quality)
+        val pick = items.firstOrNull { it.isVideo } ?: return null
+        return Resolved(pick.url, pick.headers)
+    }
+
+    /**
+     * Every piece of a post: one item for an ordinary video, and one per slide
+     * for a carousel (Instagram) or a photo post (TikTok).
+     *
+     * A ten-slide carousel used to come back as "couldn't download that video",
+     * because the parser only ever looked for a video and gave up when the first
+     * slide was a picture.
+     */
+    fun resolveAll(
+        pageUrl: String,
+        budgetMs: Int = 20_000,
+        quality: String = "high"
+    ): List<Media> {
         val deadline = System.currentTimeMillis() + budgetMs
         fun left() = (deadline - System.currentTimeMillis()).toInt()
 
         // Instagram answers logged-out requests from a phone IP through its own
         // endpoints — far more reliable than scraping a page behind a login wall.
         if (isInstagram(pageUrl)) {
-            if (left() > MIN_ATTEMPT_MS) instagramViaApi(pageUrl, left(), quality)?.let { return it }
-            if (left() > MIN_ATTEMPT_MS) instagramViaGraphql(pageUrl, left())?.let { return it }
+            if (left() > MIN_ATTEMPT_MS) {
+                val album = instagramAlbum(pageUrl, left(), quality)
+                if (album.isNotEmpty()) return album
+            }
+            if (left() > MIN_ATTEMPT_MS) {
+                instagramViaGraphql(pageUrl, left())?.let {
+                    return listOf(Media(it.url, true, it.headers))
+                }
+            }
         }
         for (candidate in candidatePages(pageUrl)) {
             if (left() < MIN_ATTEMPT_MS) break
             val page = fetch(candidate, left()) ?: continue
-            // TikTok lists several renditions; "playAddr" is only its default
-            // and is often not the best one, which is why High looked soft.
-            val media = tiktokByQuality(page.html, quality)
-                ?: findMediaUrl(page.html)
-                ?: continue
 
             val headers = HashMap<String, String>()
             headers["User-Agent"] = UA
@@ -87,9 +110,19 @@ object VideoPageExtractor {
             headers["Accept-Language"] = "en-US,en;q=0.9"
             headers["Range"] = "bytes=0-"
             if (page.cookies.isNotBlank()) headers["Cookie"] = page.cookies
-            return Resolved(media, headers)
+
+            // A TikTok photo post carries no video at all, only a slideshow.
+            val slides = tiktokImages(page.html)
+            if (slides.isNotEmpty()) return slides.map { Media(it, false, headers) }
+
+            // TikTok lists several renditions; "playAddr" is only its default
+            // and is often not the best one, which is why High looked soft.
+            val media = tiktokByQuality(page.html, quality)
+                ?: findMediaUrl(page.html)
+                ?: continue
+            return listOf(Media(media, true, headers))
         }
-        return null
+        return emptyList()
     }
 
     /**
@@ -152,8 +185,8 @@ object VideoPageExtractor {
      * with an Instagram app user-agent is what actually serves public posts, and
      * is how working downloaders reach it. Both are tried, cheapest first.
      */
-    private fun instagramViaApi(pageUrl: String, budgetMs: Int, quality: String): Resolved? {
-        val mediaId = shortcodeOf(pageUrl)?.let { shortcodeToMediaId(it) } ?: return null
+    private fun instagramAlbum(pageUrl: String, budgetMs: Int, quality: String): List<Media> {
+        val mediaId = shortcodeOf(pageUrl)?.let { shortcodeToMediaId(it) } ?: return emptyList()
         val attempts = listOf(
             "https://i.instagram.com/api/v1/media/$mediaId/info/" to IG_APP_UA,
             "https://www.instagram.com/api/v1/media/$mediaId/info/" to DESKTOP_UA
@@ -170,19 +203,40 @@ object VideoPageExtractor {
                     "Referer" to "https://www.instagram.com/"
                 )
             ) ?: continue
-            videoFromApiJson(json, heightLimit(quality))?.let { return instagramResolved(it) }
+            val pieces = mediaFromApiJson(json, heightLimit(quality))
+            if (pieces.isNotEmpty()) return pieces
         }
-        return null
+        return emptyList()
     }
 
-    private fun videoFromApiJson(json: String, limit: Int): String? = runCatching {
-        val items = org.json.JSONObject(json).optJSONArray("items") ?: return@runCatching null
-        val item = items.optJSONObject(0) ?: return@runCatching null
-        // A carousel keeps its videos one level down.
-        val holder = item.optJSONArray("carousel_media")?.optJSONObject(0) ?: item
-        val versions = holder.optJSONArray("video_versions") ?: return@runCatching null
+    /**
+     * Reads a post out of Instagram's media JSON.
+     *
+     * A carousel puts each slide in `carousel_media`, and a slide is either a
+     * video (`video_versions`) or a picture (`image_versions2`). A single post
+     * has those same fields at the top level, so both shapes go through here.
+     */
+    private fun mediaFromApiJson(json: String, limit: Int): List<Media> = runCatching {
+        val item = org.json.JSONObject(json).optJSONArray("items")?.optJSONObject(0)
+            ?: return@runCatching emptyList()
+        val carousel = item.optJSONArray("carousel_media")
+        val slides = if (carousel != null) {
+            (0 until carousel.length()).mapNotNull { carousel.optJSONObject(it) }
+        } else {
+            listOf(item)
+        }
+        slides.mapNotNull { slide ->
+            bestVideo(slide.optJSONArray("video_versions"), limit)?.let { return@mapNotNull it.toMedia(true) }
+            val candidates = slide.optJSONObject("image_versions2")?.optJSONArray("candidates")
+            bestImage(candidates)?.toMedia(false)
+        }
+    }.getOrNull().orEmpty()
 
-        // Instagram lists renditions largest first; take the biggest that fits.
+    private fun String.toMedia(isVideo: Boolean) = Media(this, isVideo, IG_HEADERS)
+
+    /** Instagram lists renditions largest first; take the biggest that fits. */
+    private fun bestVideo(versions: org.json.JSONArray?, limit: Int): String? {
+        if (versions == null) return null
         var best: String? = null
         var bestHeight = -1
         for (i in 0 until versions.length()) {
@@ -195,8 +249,50 @@ object VideoPageExtractor {
                 best = url
             }
         }
-        best ?: versions.optJSONObject(0)?.optString("url")
-    }.getOrNull()?.takeIf { it.isNotBlank() }
+        return (best ?: versions.optJSONObject(0)?.optString("url"))?.takeIf { it.isNotBlank() }
+    }
+
+    /** Pictures have no quality setting to respect, so take the largest. */
+    private fun bestImage(candidates: org.json.JSONArray?): String? {
+        if (candidates == null) return null
+        var best: String? = null
+        var bestWidth = -1
+        for (i in 0 until candidates.length()) {
+            val candidate = candidates.optJSONObject(i) ?: continue
+            val url = candidate.optString("url")
+            if (url.isBlank()) continue
+            val width = candidate.optInt("width", 0)
+            if (width > bestWidth) {
+                bestWidth = width
+                best = url
+            }
+        }
+        return best?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * A TikTok photo post: no video, just a slideshow under "imagePost".
+     *
+     * Only that section is searched — the rest of the page is full of avatars
+     * and thumbnails that would otherwise come back as slides.
+     */
+    private fun tiktokImages(html: String): List<String> {
+        val slides = imagesInSection(html) + imagesInSection(unescape(html))
+        return slides.distinct()
+    }
+
+    private fun imagesInSection(html: String): List<String> {
+        val start = html.indexOf("\"imagePost\"")
+        if (start < 0) return emptyList()
+        val section = html.substring(start, minOf(html.length, start + 60_000))
+        return TIKTOK_IMAGE.findAll(section)
+            .map { unescape(it.groupValues[1]) }
+            .filter { it.startsWith("http") }
+            .toList()
+    }
+
+    private val TIKTOK_IMAGE =
+        Regex("\"imageURL\"\\s*:\\s*\\{\\s*\"urlList\"\\s*:\\s*\\[\\s*\"([^\"]+)\"")
 
     /**
      * Instagram's public post query. Meta rotates the query id, so a few known
@@ -250,15 +346,14 @@ object VideoPageExtractor {
         return null
     }
 
-    private fun instagramResolved(url: String) = Resolved(
-        url,
-        mapOf(
-            "User-Agent" to UA,
-            "Referer" to "https://www.instagram.com/",
-            "Accept" to "*/*",
-            "Range" to "bytes=0-"
-        )
+    private val IG_HEADERS = mapOf(
+        "User-Agent" to UA,
+        "Referer" to "https://www.instagram.com/",
+        "Accept" to "*/*",
+        "Range" to "bytes=0-"
     )
+
+    private fun instagramResolved(url: String) = Resolved(url, IG_HEADERS)
 
     /** Small GET helper that respects the remaining budget. */
     private fun httpGet(url: String, budgetMs: Int, headers: Map<String, String>): String? =

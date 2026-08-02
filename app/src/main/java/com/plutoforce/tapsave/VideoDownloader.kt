@@ -27,8 +27,14 @@ object VideoDownloader {
         val message: String,
         val uri: String? = null,
         val name: String? = null,
-        val audio: Boolean = false
+        val audio: Boolean = false,
+        /** Every file saved, when a post held more than one. */
+        val parts: List<Part> = emptyList()
     )
+
+    data class Part(val name: String, val uri: String, val audio: Boolean)
+
+    private enum class Kind { VIDEO, AUDIO, IMAGE }
 
     private data class Resolved(val url: String, val headers: Map<String, String>)
 
@@ -79,20 +85,27 @@ object VideoDownloader {
             // an ordinary mobile IP) and pull straight from the platform's CDN.
             // This is both the reliable path and by far the fastest.
             if (VideoPageExtractor.canHandle(videoUrl)) {
-                val onDevice = runCatching {
+                val pieces = runCatching {
                     // Bounded so a platform that won't answer can't eat the budget.
-                    VideoPageExtractor.resolve(
+                    VideoPageExtractor.resolveAll(
                         videoUrl,
                         remaining(deadline).coerceAtMost(26_000),
                         quality
                     )
-                }.getOrNull()
+                }.getOrNull().orEmpty()
+
+                // A carousel or photo post: save every slide, not just the first.
+                if (pieces.size > 1) {
+                    val album = runCatching { saveAlbum(context, pieces, onProgress) }.getOrNull()
+                    if (album != null && album.ok) return album
+                }
+                val onDevice = pieces.firstOrNull()
                 if (onDevice != null) {
                     val saved = runCatching {
                         saveFrom(
                             context,
                             openDirect(Resolved(onDevice.url, onDevice.headers), remaining(deadline)),
-                            audioOnly = false,
+                            if (onDevice.isVideo) Kind.VIDEO else Kind.IMAGE,
                             onProgress = onProgress
                         )
                     }.getOrNull()
@@ -113,7 +126,7 @@ object VideoDownloader {
                         saveFrom(
                             context,
                             openDirect(resolved, remaining(deadline)),
-                            audioOnly = false,
+                            Kind.VIDEO,
                             onProgress = onProgress
                         )
                     }.getOrNull()
@@ -137,7 +150,7 @@ object VideoDownloader {
             saveFrom(
                 context,
                 openBackend(base, videoUrl, audioOnly, quality, serverBudget),
-                audioOnly,
+                if (audioOnly) Kind.AUDIO else Kind.VIDEO,
                 onProgress
             )
         }.getOrElse { e ->
@@ -243,6 +256,17 @@ object VideoDownloader {
         return connection
     }
 
+    /** Instagram serves jpg, TikTok often webp — keep whatever came back. */
+    private fun imageExtension(connection: HttpURLConnection): String {
+        val type = connection.contentType.orEmpty().substringAfter("image/", "").substringBefore(";").trim()
+        return when (type.lowercase()) {
+            "webp" -> ".webp"
+            "png" -> ".png"
+            "heic" -> ".heic"
+            else -> ".jpg"
+        }
+    }
+
     /** Pulls the human-readable sentence out of the backend's error body. */
     private fun readError(connection: HttpURLConnection): String {
         val raw = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
@@ -256,31 +280,84 @@ object VideoDownloader {
 
     // --- Saving ------------------------------------------------------------
 
+    /**
+     * Saves every slide of a carousel or photo post.
+     *
+     * Each slide gets its own slice of the progress bar, so ten pictures fill it
+     * once rather than snapping back to zero ten times. One slide failing
+     * doesn't lose the rest — the count says what actually landed.
+     */
+    private fun saveAlbum(
+        context: Context,
+        pieces: List<VideoPageExtractor.Media>,
+        onProgress: (Int) -> Unit
+    ): Result {
+        val saved = ArrayList<Part>()
+        pieces.forEachIndexed { index, piece ->
+            val slice = 100 / pieces.size
+            val done = index * slice
+            val outcome = runCatching {
+                saveFrom(
+                    context,
+                    // Per slide, so a long carousel isn't cut off by one budget.
+                    openDirect(Resolved(piece.url, piece.headers), PER_ITEM_MS),
+                    if (piece.isVideo) Kind.VIDEO else Kind.IMAGE
+                ) { pct -> onProgress(done + pct * slice / 100) }
+            }.getOrNull()
+            if (outcome != null && outcome.ok && outcome.uri != null && outcome.name != null) {
+                saved.add(Part(outcome.name, outcome.uri, outcome.audio))
+            }
+        }
+        if (saved.isEmpty()) return Result(false, "None of the slides would download")
+        onProgress(100)
+
+        val message = if (saved.size == pieces.size) {
+            "Saved all ${saved.size} to your gallery"
+        } else {
+            "Saved ${saved.size} of ${pieces.size} — the rest wouldn't download"
+        }
+        return Result(true, message, saved.first().uri, saved.first().name, false, saved)
+    }
+
+    /** A single slide's own timeout, separate from the whole-post budget. */
+    private const val PER_ITEM_MS = 25_000
+
     private fun saveFrom(
         context: Context,
         connection: HttpURLConnection,
-        audioOnly: Boolean,
+        kind: Kind,
         onProgress: (Int) -> Unit
     ): Result {
         try {
             val total = connection.contentLengthLong
-            val name = "TapSave_${System.currentTimeMillis()}" + if (audioOnly) ".mp3" else ".mp4"
+            val audioOnly = kind == Kind.AUDIO
+            val extension = when (kind) {
+                Kind.AUDIO -> ".mp3"
+                Kind.VIDEO -> ".mp4"
+                Kind.IMAGE -> imageExtension(connection)
+            }
+            val name = "TapSave_${System.currentTimeMillis()}$extension"
             val resolver = context.contentResolver
 
-            val collection = if (audioOnly) {
-                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            } else {
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val collection = when (kind) {
+                Kind.AUDIO -> MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                Kind.VIDEO -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                Kind.IMAGE -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             }
-            val relativePath = if (audioOnly) {
-                Environment.DIRECTORY_MUSIC + "/TapSave"
-            } else {
-                Environment.DIRECTORY_MOVIES + "/TapSave"
+            val relativePath = when (kind) {
+                Kind.AUDIO -> Environment.DIRECTORY_MUSIC + "/TapSave"
+                Kind.VIDEO -> Environment.DIRECTORY_MOVIES + "/TapSave"
+                Kind.IMAGE -> Environment.DIRECTORY_PICTURES + "/TapSave"
+            }
+            val mime = when (kind) {
+                Kind.AUDIO -> "audio/mpeg"
+                Kind.VIDEO -> "video/mp4"
+                Kind.IMAGE -> "image/" + extension.removePrefix(".").replace("jpg", "jpeg")
             }
 
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-                put(MediaStore.MediaColumns.MIME_TYPE, if (audioOnly) "audio/mpeg" else "video/mp4")
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
@@ -324,7 +401,11 @@ object VideoDownloader {
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
 
-            val where = if (audioOnly) "Music/TapSave" else "Gallery (Movies/TapSave)"
+            val where = when (kind) {
+                Kind.AUDIO -> "Music/TapSave"
+                Kind.VIDEO -> "Gallery (Movies/TapSave)"
+                Kind.IMAGE -> "Gallery (Pictures/TapSave)"
+            }
             return Result(true, "Saved to $where", uri.toString(), name, audioOnly)
         } finally {
             connection.disconnect()
