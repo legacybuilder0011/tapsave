@@ -25,6 +25,16 @@ object VideoPageExtractor {
     /** One downloadable piece of a post — a video, or a slide from a carousel. */
     data class Media(val url: String, val isVideo: Boolean, val headers: Map<String, String>)
 
+    /**
+     * Why the last attempt found nothing — shown to the user when everything
+     * fails. "Couldn't download that video" on its own says nothing about
+     * whether the platform refused us, answered with an empty post, or was
+     * never reached at all.
+     */
+    @Volatile
+    var lastReason: String = ""
+        private set
+
     private const val UA =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 " +
             "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
@@ -83,6 +93,7 @@ object VideoPageExtractor {
         budgetMs: Int = 20_000,
         quality: String = "high"
     ): List<Media> {
+        lastReason = ""
         val deadline = System.currentTimeMillis() + budgetMs
         fun left() = (deadline - System.currentTimeMillis()).toInt()
 
@@ -94,9 +105,8 @@ object VideoPageExtractor {
                 if (album.isNotEmpty()) return album
             }
             if (left() > MIN_ATTEMPT_MS) {
-                instagramViaGraphql(pageUrl, left())?.let {
-                    return listOf(Media(it.url, true, it.headers))
-                }
+                val graph = instagramGraphqlAlbum(pageUrl, left())
+                if (graph.isNotEmpty()) return graph
             }
         }
         for (candidate in candidatePages(pageUrl)) {
@@ -115,6 +125,12 @@ object VideoPageExtractor {
             val slides = tiktokImages(page.html)
             if (slides.isNotEmpty()) return slides.map { Media(it, false, headers) }
 
+            // Last resort for Instagram: read the media straight out of the page.
+            if (isInstagram(pageUrl)) {
+                val fromPage = instagramMediaFromHtml(page.html, headers)
+                if (fromPage.isNotEmpty()) return fromPage
+            }
+
             // TikTok lists several renditions; "playAddr" is only its default
             // and is often not the best one, which is why High looked soft.
             val media = tiktokByQuality(page.html, quality)
@@ -122,6 +138,7 @@ object VideoPageExtractor {
                 ?: continue
             return listOf(Media(media, true, headers))
         }
+        if (lastReason.isBlank()) lastReason = "nothing downloadable on the page"
         return emptyList()
     }
 
@@ -201,10 +218,12 @@ object VideoPageExtractor {
                     "x-ig-www-claim" to "0",
                     "Accept" to "*/*",
                     "Referer" to "https://www.instagram.com/"
-                )
+                ),
+                label = "Instagram"
             ) ?: continue
             val pieces = mediaFromApiJson(json, heightLimit(quality))
             if (pieces.isNotEmpty()) return pieces
+            note("Instagram answered, but the post had no media we can read")
         }
         return emptyList()
     }
@@ -298,8 +317,12 @@ object VideoPageExtractor {
      * Instagram's public post query. Meta rotates the query id, so a few known
      * ones are tried rather than betting everything on a single value.
      */
-    private fun instagramViaGraphql(pageUrl: String, budgetMs: Int): Resolved? {
-        val shortcode = shortcodeOf(pageUrl) ?: return null
+    /**
+     * Instagram's public post query. Handles carousels: each slide hangs off
+     * edge_sidecar_to_children and is a video or a picture, same as the app.
+     */
+    private fun instagramGraphqlAlbum(pageUrl: String, budgetMs: Int): List<Media> {
+        val shortcode = shortcodeOf(pageUrl) ?: return emptyList()
         val deadline = System.currentTimeMillis() + budgetMs
 
         for (docId in IG_DOC_IDS) {
@@ -324,26 +347,78 @@ object VideoPageExtractor {
                 }
                 try {
                     connection.outputStream.use { it.write(body.toByteArray()) }
-                    if (connection.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
+                    val code = connection.responseCode
+                    if (code != HttpURLConnection.HTTP_OK) {
+                        note("Instagram's post query said $code")
+                        return@runCatching null
+                    }
                     connection.inputStream.bufferedReader().use { it.readText() }
                 } finally {
                     connection.disconnect()
                 }
             }.getOrNull() ?: continue
 
-            val media = runCatching {
+            val slides = runCatching {
                 val node = org.json.JSONObject(json)
                     .optJSONObject("data")
-                    ?.optJSONObject("xdt_shortcode_media") ?: return@runCatching null
-                node.optString("video_url").takeIf { it.isNotBlank() }
-                    ?: node.optJSONObject("edge_sidecar_to_children")
-                        ?.optJSONArray("edges")?.optJSONObject(0)
-                        ?.optJSONObject("node")?.optString("video_url")
-            }.getOrNull()
+                    ?.optJSONObject("xdt_shortcode_media")
+                    ?: return@runCatching emptyList()
+                val edges = node.optJSONObject("edge_sidecar_to_children")?.optJSONArray("edges")
+                if (edges == null) {
+                    listOfNotNull(fromGraphNode(node))
+                } else {
+                    (0 until edges.length())
+                        .mapNotNull { edges.optJSONObject(it)?.optJSONObject("node") }
+                        .mapNotNull { fromGraphNode(it) }
+                }
+            }.getOrNull().orEmpty()
 
-            if (!media.isNullOrBlank()) return instagramResolved(media)
+            if (slides.isNotEmpty()) return slides
+            note("Instagram's post query returned no media")
         }
+        return emptyList()
+    }
+
+    /** A slide from the post query: the video if there is one, else the picture. */
+    private fun fromGraphNode(node: org.json.JSONObject): Media? {
+        node.optString("video_url").takeIf { it.isNotBlank() }
+            ?.let { return Media(it, true, IG_HEADERS) }
+        node.optString("display_url").takeIf { it.isNotBlank() }
+            ?.let { return Media(it, false, IG_HEADERS) }
         return null
+    }
+
+    private val IG_VIDEO_URL = Regex("\"video_url\"\\s*:\\s*\"([^\"]{20,})\"")
+    private val IG_DISPLAY_URL = Regex("\"display_url\"\\s*:\\s*\"([^\"]{20,})\"")
+
+    /**
+     * Reads whatever media the embed page carries.
+     *
+     * The page is checked in both its raw and unescaped forms, because Instagram
+     * embeds the post as JSON inside JSON and the quotes come through doubled.
+     * A video's poster image appears here too, so pictures are only used when the
+     * post has no video at all — otherwise every Reel would also save its
+     * thumbnail as a stray photo.
+     */
+    private fun instagramMediaFromHtml(html: String, headers: Map<String, String>): List<Media> {
+        val text = html + "\n" + unescape(html)
+        val videos = IG_VIDEO_URL.findAll(text)
+            .map { unescape(it.groupValues[1]) }
+            .filter { it.startsWith("http") }
+            .distinct()
+            .toList()
+        if (videos.isNotEmpty()) return videos.map { Media(it, true, headers) }
+
+        return IG_DISPLAY_URL.findAll(text)
+            .map { unescape(it.groupValues[1]) }
+            .filter { it.startsWith("http") }
+            .distinctBy { it.substringBefore("?") }
+            .map { Media(it, false, headers) }
+            .toList()
+    }
+
+    private fun note(reason: String) {
+        lastReason = reason
     }
 
     private val IG_HEADERS = mapOf(
@@ -353,10 +428,13 @@ object VideoPageExtractor {
         "Range" to "bytes=0-"
     )
 
-    private fun instagramResolved(url: String) = Resolved(url, IG_HEADERS)
-
     /** Small GET helper that respects the remaining budget. */
-    private fun httpGet(url: String, budgetMs: Int, headers: Map<String, String>): String? =
+    private fun httpGet(
+        url: String,
+        budgetMs: Int,
+        headers: Map<String, String>,
+        label: String = ""
+    ): String? =
         runCatching {
             val connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -365,7 +443,10 @@ object VideoPageExtractor {
                 headers.forEach { (key, value) -> setRequestProperty(key, value) }
             }
             try {
-                if (connection.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
+                if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                    if (label.isNotBlank()) note("$label said ${connection.responseCode}")
+                    return@runCatching null
+                }
                 connection.inputStream.bufferedReader().use { it.readText() }
             } finally {
                 connection.disconnect()

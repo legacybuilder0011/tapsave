@@ -158,7 +158,7 @@ object VideoDownloader {
             if (message.isNullOrBlank() || e is java.net.SocketTimeoutException) {
                 timedOut(videoUrl)
             } else {
-                Result(false, message)
+                Result(false, withReason(message))
             }
         }
     }
@@ -168,11 +168,21 @@ object VideoDownloader {
 
     private fun timedOut(videoUrl: String): Result {
         val where = if (VideoPageExtractor.isBlockedForServers(videoUrl)) {
-            "Couldn't reach this video. Check your connection and try again."
+            "Couldn't reach this post. Check your connection and try again."
         } else {
             "Took too long — try again, or check the link is public."
         }
-        return Result(false, where)
+        return Result(false, withReason(where))
+    }
+
+    /**
+     * Adds what the platform actually said. A bare "couldn't download" gives
+     * nobody anything to act on — whether Instagram refused the request, sent
+     * back an empty post, or was never reached changes what to try next.
+     */
+    private fun withReason(message: String): String {
+        val reason = VideoPageExtractor.lastReason
+        return if (reason.isBlank()) message else "$message ($reason)"
     }
 
     // --- Connections -------------------------------------------------------
