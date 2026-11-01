@@ -10,6 +10,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
+/** Video, audio or picture — the extractor's idea of it, used here too. */
+private typealias Kind = VideoPageExtractor.Kind
+
 /**
  * Fetches a video (or audio) and saves it into the phone's gallery
  * ("Movies/TapSave") or music library ("Music/TapSave").
@@ -34,9 +37,13 @@ object VideoDownloader {
 
     data class Part(val name: String, val uri: String, val audio: Boolean)
 
-    private enum class Kind { VIDEO, AUDIO, IMAGE }
 
-    private data class Resolved(val url: String, val headers: Map<String, String>)
+    private data class Resolved(
+        val url: String,
+        val headers: Map<String, String>,
+        /** The server saying this post is sound only, such as a podcast. */
+        val audio: Boolean = false
+    )
 
     /** Whole-attempt budget, so a failing download never spins for minutes. */
     private const val TOTAL_BUDGET_MS = 55_000L
@@ -105,7 +112,7 @@ object VideoDownloader {
                         saveFrom(
                             context,
                             openDirect(Resolved(onDevice.url, onDevice.headers), remaining(deadline)),
-                            if (onDevice.isVideo) Kind.VIDEO else Kind.IMAGE,
+                            onDevice.kind,
                             onProgress = onProgress
                         )
                     }.getOrNull()
@@ -135,7 +142,7 @@ object VideoDownloader {
                         saveFrom(
                             context,
                             openDirect(resolved, remaining(deadline)),
-                            Kind.VIDEO,
+                            if (resolved.audio) Kind.AUDIO else Kind.VIDEO,
                             onProgress = onProgress
                         )
                     }.getOrNull()
@@ -156,12 +163,8 @@ object VideoDownloader {
         }
 
         return runCatching {
-            saveFrom(
-                context,
-                openBackend(base, videoUrl, audioOnly, quality, serverBudget),
-                if (audioOnly) Kind.AUDIO else Kind.VIDEO,
-                onProgress
-            )
+            val connection = openBackend(base, videoUrl, audioOnly, quality, serverBudget)
+            saveFrom(context, connection, kindOf(connection, audioOnly), onProgress)
         }.getOrElse { e ->
             val message = e.message
             if (message.isNullOrBlank() || e is java.net.SocketTimeoutException) {
@@ -220,7 +223,7 @@ object VideoDownloader {
             json.optJSONObject("headers")?.let { obj ->
                 obj.keys().forEach { key -> headers[key] = obj.optString(key) }
             }
-            return Resolved(url, headers)
+            return Resolved(url, headers, json.optBoolean("audio", false))
         } finally {
             connection.disconnect()
         }
@@ -275,6 +278,31 @@ object VideoDownloader {
         return connection
     }
 
+    /**
+     * What the server actually sent.
+     *
+     * A Substack podcast episode is audio whether or not Audio only was ticked,
+     * and saving it as an .mp4 in Movies would be wrong in both the name and
+     * the place.
+     */
+    private fun kindOf(connection: HttpURLConnection, audioOnly: Boolean): Kind {
+        val type = connection.contentType.orEmpty().lowercase()
+        return when {
+            type.startsWith("audio/") -> Kind.AUDIO
+            type.startsWith("image/") -> Kind.IMAGE
+            audioOnly -> Kind.AUDIO
+            else -> Kind.VIDEO
+        }
+    }
+
+    /** Substack serves mp3; some podcasts arrive as m4a. */
+    private fun audioExtension(connection: HttpURLConnection): String =
+        when (connection.contentType.orEmpty().lowercase().substringBefore(";").trim()) {
+            "audio/mp4", "audio/x-m4a", "audio/aac" -> ".m4a"
+            "audio/ogg", "audio/opus" -> ".ogg"
+            else -> ".mp3"
+        }
+
     /** Instagram serves jpg, TikTok often webp — keep whatever came back. */
     private fun imageExtension(connection: HttpURLConnection): String {
         val type = connection.contentType.orEmpty().substringAfter("image/", "").substringBefore(";").trim()
@@ -320,7 +348,7 @@ object VideoDownloader {
                     context,
                     // Per slide, so a long carousel isn't cut off by one budget.
                     openDirect(Resolved(piece.url, piece.headers), PER_ITEM_MS),
-                    if (piece.isVideo) Kind.VIDEO else Kind.IMAGE
+                    piece.kind
                 ) { pct -> onProgress(done + pct * slice / 100) }
             }.getOrNull()
             if (outcome != null && outcome.ok && outcome.uri != null && outcome.name != null) {
@@ -351,7 +379,7 @@ object VideoDownloader {
             val total = connection.contentLengthLong
             val audioOnly = kind == Kind.AUDIO
             val extension = when (kind) {
-                Kind.AUDIO -> ".mp3"
+                Kind.AUDIO -> audioExtension(connection)
                 Kind.VIDEO -> ".mp4"
                 Kind.IMAGE -> imageExtension(connection)
             }
@@ -369,7 +397,7 @@ object VideoDownloader {
                 Kind.IMAGE -> Environment.DIRECTORY_PICTURES + "/TapSave"
             }
             val mime = when (kind) {
-                Kind.AUDIO -> "audio/mpeg"
+                Kind.AUDIO -> if (extension == ".m4a") "audio/mp4" else "audio/mpeg"
                 Kind.VIDEO -> "video/mp4"
                 Kind.IMAGE -> "image/" + extension.removePrefix(".").replace("jpg", "jpeg")
             }

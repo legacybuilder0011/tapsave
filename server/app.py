@@ -73,7 +73,7 @@ INDEX_HTML = """<!doctype html>
 <body>
   <div class="card">
     <h1>TapSave</h1>
-    <p class="sub">Paste a video link (TikTok, Instagram, Pinterest) and download it.</p>
+    <p class="sub">Paste a link (TikTok, Instagram, Pinterest, Substack) and download it.</p>
     <button id="paste">📋 Paste link &amp; download</button>
     <input id="url" type="url" placeholder="or paste the link here…" autocomplete="off">
     <div class="row">
@@ -228,7 +228,7 @@ COOKIES_FILE = os.environ.get("YTDLP_COOKIES", "/etc/secrets/cookies.txt")
 
 _YOUTUBE_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
 
-YOUTUBE_MESSAGE = "YouTube isn't supported. TikTok, Instagram and Pinterest work."
+YOUTUBE_MESSAGE = "YouTube isn't supported. TikTok, Instagram, Pinterest and Substack work."
 
 MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
@@ -243,6 +243,11 @@ def is_youtube(url: str) -> bool:
 
 def is_tiktok(url: str) -> bool:
     return "tiktok" in urlparse(url).netloc.lower()
+
+
+def is_substack(url: str) -> bool:
+    """Substack's own domain, or a writer's custom one — the page says which."""
+    return "substack.com" in urlparse(url).netloc.lower()
 
 
 def attempt_variants(url: str):
@@ -263,6 +268,42 @@ def attempt_variants(url: str):
     return [[], ["--user-agent", MOBILE_UA]]
 
 
+# A post can be audio with no video at all — a podcast episode, say — and then
+# yt-dlp writes an audio file whatever the request asked for.
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".flac"}
+
+
+def media_type_for(path: str, sound_only: bool) -> str:
+    if not sound_only:
+        return "video/mp4"
+    return {
+        ".m4a": "audio/mp4",
+        ".aac": "audio/mp4",
+        ".opus": "audio/ogg",
+        ".ogg": "audio/ogg",
+        ".wav": "audio/wav",
+        ".flac": "audio/flac",
+    }.get(os.path.splitext(path)[1].lower(), "audio/mpeg")
+
+
+def best_audio_only(formats) -> dict:
+    """The largest plain-https audio track, for posts that carry no video."""
+    best = None
+    for fmt in formats:
+        if not fmt.get("url"):
+            continue
+        if fmt.get("vcodec") not in (None, "none"):
+            continue
+        if fmt.get("acodec") in (None, "none"):
+            continue
+        if fmt.get("protocol") not in (None, "https", "http"):
+            continue
+        rate = fmt.get("abr") or fmt.get("tbr") or 0
+        if best is None or rate > (best.get("abr") or best.get("tbr") or 0):
+            best = fmt
+    return best
+
+
 def friendly_error(detail: str, url: str) -> str:
     """Turns a wall of yt-dlp output into one sentence a person can act on."""
     low = detail.lower()
@@ -275,9 +316,16 @@ def friendly_error(detail: str, url: str) -> str:
                 "again from your phone — if that also fails, try another link."
             )
         return "That video isn't available to download (private, deleted or region-locked)."
+    if "paid subscriber" in low or "paying subscriber" in low or "subscriber-only" in low:
+        return "That post is for paid subscribers, so it can't be downloaded."
     if "login required" in low or "log in" in low or "rate-limit" in low:
         return "That post needs a login, so it can't be downloaded."
     if "unsupported url" in low:
+        if is_substack(url):
+            return (
+                "That Substack link isn't a post with audio or video. Open the "
+                "episode or video post and copy that link."
+            )
         return "That link isn't a video TapSave can download."
     if "unable to download webpage" in low or "timed out" in low:
         return "Couldn't reach that site just now. Try again in a moment."
@@ -728,6 +776,18 @@ def resolve(
                 best = (score, fmt)
 
         if not best:
+            # A podcast episode has no video track at all. Its audio file is a
+            # plain https mp3, so the phone can still fetch it straight from the
+            # CDN rather than having it relayed through here.
+            sound = best_audio_only(info.get("formats") or [])
+            if sound:
+                return {
+                    "direct": True,
+                    "url": sound["url"],
+                    "headers": sound.get("http_headers") or {},
+                    "ext": sound.get("ext") or "mp3",
+                    "audio": True,
+                }
             return {"direct": False}
 
         fmt = best[1]
@@ -823,10 +883,12 @@ def download(
         raise HTTPException(status_code=502, detail="No file was produced")
 
     path = max(files, key=os.path.getsize)
-    if not audio:
+    extension = os.path.splitext(path)[1].lower()
+    sound_only = audio or extension in AUDIO_EXTENSIONS
+    if not sound_only:
         path = maybe_transcode(path, workdir)
     return FileResponse(
         path,
-        media_type="audio/mpeg" if audio else "video/mp4",
+        media_type=media_type_for(path, sound_only),
         filename=os.path.basename(path),
     )

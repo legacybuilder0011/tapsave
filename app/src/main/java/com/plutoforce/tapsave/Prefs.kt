@@ -61,14 +61,25 @@ object Prefs {
         "facebook.com", "fb.watch",
         "twitter.com", "x.com",
         "reddit.com", "redd.it",
-        "snapchat.com", "vimeo.com", "dailymotion.com", "tumblr.com"
+        "snapchat.com", "vimeo.com", "dailymotion.com", "tumblr.com",
+        "substack.com"
     )
+
+    /**
+     * Substack writers can put their own domain in front of it, so those posts
+     * look like any other site. The post path is the giveaway, and guessing
+     * wrong costs nothing: an unsupported link just fails with a message
+     * instead of being mistaken for a WhatsApp status save.
+     */
+    private fun looksLikeSubstackPost(url: String): Boolean =
+        Regex("^https?://[^/]+/p/[^/]+").containsMatchIn(url)
 
     /** True if [url] looks like a video link TapSave can download. */
     fun isSupportedVideoLink(url: String): Boolean {
         val lower = url.lowercase()
         if (lower.contains("youtube.com") || lower.contains("youtu.be")) return false
-        return SUPPORTED_HOSTS.any { lower.contains(it) }
+        if (SUPPORTED_HOSTS.any { lower.contains(it) }) return true
+        return looksLikeSubstackPost(lower)
     }
 
     /** Returns the first http(s) URL found in [text], or null. */

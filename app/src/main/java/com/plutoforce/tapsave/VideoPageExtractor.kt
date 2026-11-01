@@ -22,14 +22,22 @@ object VideoPageExtractor {
 
     data class Resolved(val url: String, val headers: Map<String, String>)
 
-    /** One downloadable piece of a post — a video, or a slide from a carousel. */
+    /** What a piece of a post actually is, which decides where it is saved. */
+    enum class Kind { VIDEO, AUDIO, IMAGE }
+
+    /**
+     * One downloadable piece of a post — a video, a podcast episode, or a slide
+     * from a carousel.
+     */
     data class Media(
         val url: String,
-        val isVideo: Boolean,
+        val kind: Kind,
         val headers: Map<String, String>,
-        /** True when this is all Instagram would serve, not the whole post. */
+        /** True when this is all the platform would serve, not the whole post. */
         val partial: Boolean = false
-    )
+    ) {
+        val isVideo: Boolean get() = kind == Kind.VIDEO
+    }
 
     /**
      * Why the last attempt found nothing — shown to the user when everything
@@ -51,6 +59,18 @@ object VideoPageExtractor {
 
     /** Don't start another attempt with less time than this left. */
     private const val MIN_ATTEMPT_MS = 3_000
+
+    /**
+     * Substack, including the custom domains writers put in front of it — those
+     * look like any other site, so the page itself is what gives it away.
+     */
+    fun isSubstack(url: String) = url.contains("substack.com", ignoreCase = true)
+
+    // Markers only a Substack-served page carries. A mere mention of substack.com
+    // isn't one — plenty of pages link to it.
+    private fun looksLikeSubstack(html: String) =
+        html.contains("substackcdn.com", ignoreCase = true) ||
+            html.contains("window._preloads", ignoreCase = true)
 
     private fun isInstagram(url: String) =
         url.contains("instagram.com", ignoreCase = true) ||
@@ -82,7 +102,10 @@ object VideoPageExtractor {
         quality: String = "high"
     ): Resolved? {
         val items = resolveAll(pageUrl, budgetMs, quality)
-        val pick = items.firstOrNull { it.isVideo } ?: return null
+        // A podcast episode has no video, and transcription only needs sound.
+        val pick = items.firstOrNull { it.kind == Kind.VIDEO }
+            ?: items.firstOrNull { it.kind == Kind.AUDIO }
+            ?: return null
         return Resolved(pick.url, pick.headers)
     }
 
@@ -129,7 +152,16 @@ object VideoPageExtractor {
 
             // A TikTok photo post carries no video at all, only a slideshow.
             val slides = tiktokImages(page.html)
-            if (slides.isNotEmpty()) return slides.map { Media(it, false, headers) }
+            if (slides.isNotEmpty()) return slides.map { Media(it, Kind.IMAGE, headers) }
+
+            // A Substack post: a podcast episode, a video, or a recorded
+            // broadcast. Audio is a plain mp3, which the phone can take itself.
+            val substack = !isBlockedForServers(pageUrl) &&
+                (isSubstack(candidate) || looksLikeSubstack(page.html))
+            if (substack) {
+                val post = substackMedia(page.html, headers)
+                if (post.isNotEmpty()) return post
+            }
 
             // Last resort for Instagram: read the media straight out of the page.
             if (isInstagram(pageUrl)) {
@@ -142,7 +174,7 @@ object VideoPageExtractor {
             val media = tiktokByQuality(page.html, quality)
                 ?: findMediaUrl(page.html)
                 ?: continue
-            return listOf(Media(media, true, headers))
+            return listOf(Media(media, Kind.VIDEO, headers))
         }
         // Everything else refused us; the share picture is still worth having.
         if (isInstagram(pageUrl)) {
@@ -256,13 +288,13 @@ object VideoPageExtractor {
             listOf(item)
         }
         slides.mapNotNull { slide ->
-            bestVideo(slide.optJSONArray("video_versions"), limit)?.let { return@mapNotNull it.toMedia(true) }
+            bestVideo(slide.optJSONArray("video_versions"), limit)?.let { return@mapNotNull it.toMedia(Kind.VIDEO) }
             val candidates = slide.optJSONObject("image_versions2")?.optJSONArray("candidates")
-            bestImage(candidates)?.toMedia(false)
+            bestImage(candidates)?.toMedia(Kind.IMAGE)
         }
     }.getOrNull().orEmpty()
 
-    private fun String.toMedia(isVideo: Boolean) = Media(this, isVideo, IG_HEADERS)
+    private fun String.toMedia(kind: Kind) = Media(this, kind, IG_HEADERS)
 
     /** Instagram lists renditions largest first; take the biggest that fits. */
     private fun bestVideo(versions: org.json.JSONArray?, limit: Int): String? {
@@ -393,9 +425,9 @@ object VideoPageExtractor {
     /** A slide from the post query: the video if there is one, else the picture. */
     private fun fromGraphNode(node: org.json.JSONObject): Media? {
         node.optString("video_url").takeIf { it.isNotBlank() }
-            ?.let { return Media(it, true, IG_HEADERS) }
+            ?.let { return Media(it, Kind.VIDEO, IG_HEADERS) }
         node.optString("display_url").takeIf { it.isNotBlank() }
-            ?.let { return Media(it, false, IG_HEADERS) }
+            ?.let { return Media(it, Kind.IMAGE, IG_HEADERS) }
         return null
     }
 
@@ -418,21 +450,21 @@ object VideoPageExtractor {
             .filter { it.startsWith("http") }
             .distinct()
             .toList()
-        if (videos.isNotEmpty()) return videos.map { Media(it, true, headers) }
+        if (videos.isNotEmpty()) return videos.map { Media(it, Kind.VIDEO, headers) }
 
         val displayed = IG_DISPLAY_URL.findAll(text)
             .map { unescape(it.groupValues[1]) }
             .filter { it.startsWith("http") }
             .distinctBy { it.substringBefore("?") }
             .toList()
-        if (displayed.isNotEmpty()) return displayed.map { Media(it, false, headers) }
+        if (displayed.isNotEmpty()) return displayed.map { Media(it, Kind.IMAGE, headers) }
 
         // The share preview. One slide of a carousel, but a real picture and
         // better than sending the user away with nothing.
         val preview = OG_IMAGE.find(text)?.groupValues?.get(1)?.let { unescape(it) }
         if (preview != null && preview.startsWith("http")) {
             note("Instagram only served the first slide")
-            return listOf(Media(preview, false, headers, partial = true))
+            return listOf(Media(preview, Kind.IMAGE, headers, partial = true))
         }
         return emptyList()
     }
@@ -453,7 +485,7 @@ object VideoPageExtractor {
         return listOf(
             Media(
                 "https://www.instagram.com/p/$code/media/?size=l",
-                isVideo = false,
+                kind = Kind.IMAGE,
                 headers = IG_HEADERS,
                 partial = true
             )
@@ -462,6 +494,57 @@ object VideoPageExtractor {
 
     private fun note(reason: String) {
         lastReason = reason
+    }
+
+    // --- Substack ----------------------------------------------------------
+
+    // A post's audio: the player's own item, the share tag, or a bare enclosure.
+    private val SUBSTACK_AUDIO = listOf(
+        Regex("\"audio_items\"\\s*:\\s*\\[.{0,400}?\"\\w*url\"\\s*:\\s*\"([^\"]+)\"", RegexOption.DOT_MATCHES_ALL),
+        Regex("\"podcast_url\"\\s*:\\s*\"([^\"]+)\""),
+        Regex("property=\"og:audio\"[^>]{0,80}content=\"([^\"]+)\"", RegexOption.IGNORE_CASE),
+        Regex("<audio[^>]{0,200}?src=\"([^\"]+)\"", RegexOption.IGNORE_CASE),
+        Regex("(https://api\\.substack\\.com/feed/podcast/[^\"'\\s\\\\]+)")
+    )
+
+    private val SUBSTACK_VIDEO = listOf(
+        Regex("\"video_?[Uu]pload\"\\s*:\\s*\\{.{0,400}?\"\\w*url\"\\s*:\\s*\"([^\"]+)\"", RegexOption.DOT_MATCHES_ALL),
+        Regex("property=\"og:video(?::url|:secure_url)?\"[^>]{0,80}content=\"([^\"]+)\"", RegexOption.IGNORE_CASE),
+        Regex("(https://[^\"'\\s\\\\]+substackcdn\\.com/video[^\"'\\s\\\\]+\\.mp4[^\"'\\s\\\\]*)")
+    )
+
+    /**
+     * What a Substack post holds.
+     *
+     * Video wins when a post has both, because a video post also publishes its
+     * own audio track and saving that alongside would be a surprise. Streaming
+     * playlists are left to the server, which has ffmpeg — saving an .m3u8
+     * straight to the gallery would write a few lines of text, not a video.
+     */
+    private fun substackMedia(html: String, headers: Map<String, String>): List<Media> {
+        val text = html + "\n" + unescape(html)
+
+        firstMatch(SUBSTACK_VIDEO, text)?.let { video ->
+            if (!isPlaylist(video)) return listOf(Media(video, Kind.VIDEO, headers))
+        }
+        firstMatch(SUBSTACK_AUDIO, text)?.let { audio ->
+            if (!isPlaylist(audio)) return listOf(Media(audio, Kind.AUDIO, headers))
+        }
+        return emptyList()
+    }
+
+    private fun firstMatch(patterns: List<Regex>, text: String): String? {
+        for (pattern in patterns) {
+            val hit = pattern.find(text)?.groupValues?.getOrNull(1)?.let { unescape(it) }
+            if (!hit.isNullOrBlank() && hit.startsWith("http")) return hit
+        }
+        return null
+    }
+
+    /** HLS and DASH are playlists, not files — only the server can flatten them. */
+    private fun isPlaylist(url: String): Boolean {
+        val path = url.substringBefore("?").lowercase()
+        return path.endsWith(".m3u8") || path.endsWith(".mpd")
     }
 
     private val IG_HEADERS = mapOf(
