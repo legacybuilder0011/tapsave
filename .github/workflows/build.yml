@@ -22,6 +22,11 @@ jobs:
           java-version: '17'
       - name: Set up the Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action installs the legacy "tools" package by default, which
+          # Google has removed from the SDK repository — it fails the build
+          # before any code is compiled. Gradle fetches what it needs itself.
+          packages: ''
       - name: Make gradlew executable
         run: chmod +x ./gradlew
       - name: Build the debug APK
